@@ -4,7 +4,7 @@ const express = require("express");
 const app = express();
 
 app.get("/", (req, res) => res.send("Bot is alive"));
-app.listen(process.env.PORT || 3000, () => console.log("Web server running"));
+app.listen(process.env.PORT || 3000);
 
 const {
   Client,
@@ -30,49 +30,82 @@ const client = new Client({
 
 // ================= DATA =================
 const queue = [];
-const activeTests = new Map();
+const activeTests = new Map(); 
+// playerId → testerId
+
+let panelMessage = null;
+
+// ================= CONFIG =================
+const MAX_QUEUE = 20;
 
 // ================= READY =================
-client.once(Events.ClientReady, () => {
+client.once(Events.ClientReady, async () => {
   console.log(`Logged in as ${client.user.tag}`);
-});
 
-// ================= DEBUG MESSAGE LOG =================
-client.on(Events.MessageCreate, async (message) => {
-  if (!message.guild || message.author.bot) return;
+  const channel = client.channels.cache.get(process.env.PANEL_CHANNEL_ID);
 
-  console.log("MESSAGE SEEN:", message.content);
+  if (channel) {
+    panelMessage = await channel.send({
+      embeds: [panel()],
+      components: [buttons()]
+    });
 
-  // ================= PANEL =================
-  if (message.content === "!panel") {
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("join")
-        .setLabel("Join Queue")
-        .setStyle(ButtonStyle.Success),
-
-      new ButtonBuilder()
-        .setCustomId("leave")
-        .setLabel("Leave Queue")
-        .setStyle(ButtonStyle.Danger),
-
-      new ButtonBuilder()
-        .setCustomId("claim")
-        .setLabel("Claim Next")
-        .setStyle(ButtonStyle.Primary)
-    );
-
-    const embed = new EmbedBuilder()
-      .setTitle("🎮 Tier Testing Queue")
-      .setDescription(`Queue size: ${queue.length}/20`)
-      .setColor(0x00ff99);
-
-    message.channel.send({ embeds: [embed], components: [row] });
+    // AUTO UPDATE EVERY 20 SECONDS
+    setInterval(async () => {
+      try {
+        await panelMessage.edit({
+          embeds: [panel()],
+          components: [buttons()]
+        });
+      } catch (err) {
+        console.log("Panel update failed:", err.message);
+      }
+    }, 20000);
   }
 });
 
+// ================= PANEL =================
+function panel() {
+
+  const queueList = queue
+    .map((p, i) => `${i + 1}. <@${p.id}>`)
+    .join("\n") || "Empty";
+
+  const activeList = Array.from(activeTests.entries())
+    .map(([player, tester]) => `<@${player}> → <@${tester}>`)
+    .join("\n") || "None";
+
+  return new EmbedBuilder()
+    .setTitle("🎮 Tier Testing System")
+    .setColor(0x00ff99)
+    .addFields(
+      { name: "Queue Size", value: `${queue.length}/${MAX_QUEUE}`, inline: true },
+      { name: "Queue", value: queueList },
+      { name: "Active Tests", value: activeList }
+    );
+}
+
 // ================= BUTTONS =================
+function buttons() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("join")
+      .setLabel("Join Queue")
+      .setStyle(ButtonStyle.Success),
+
+    new ButtonBuilder()
+      .setCustomId("leave")
+      .setLabel("Leave Queue")
+      .setStyle(ButtonStyle.Danger),
+
+    new ButtonBuilder()
+      .setCustomId("claim")
+      .setLabel("Claim Next (Tester Only)")
+      .setStyle(ButtonStyle.Primary)
+  );
+}
+
+// ================= EVENTS =================
 client.on(Events.InteractionCreate, async (interaction) => {
 
   if (!interaction.isButton() && !interaction.isModalSubmit()) return;
@@ -85,14 +118,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (queue.find(p => p.id === user.id))
       return interaction.reply({ content: "Already in queue", ephemeral: true });
 
-    if (queue.length >= 20)
+    if (queue.length >= MAX_QUEUE)
       return interaction.reply({ content: "Queue full", ephemeral: true });
 
-    queue.push({
-      id: user.id,
-      tag: user.tag,
-      rank: 0
-    });
+    queue.push({ id: user.id });
 
     return interaction.reply({ content: "Joined queue", ephemeral: true });
   }
@@ -110,47 +139,42 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return interaction.reply({ content: "Left queue", ephemeral: true });
   }
 
-  // ================= CLAIM =================
+  // ================= CLAIM (FIXED FLOW) =================
   if (interaction.customId === "claim") {
 
-    if (queue.length === 0)
-      return interaction.reply({ content: "Queue empty", ephemeral: true });
+    // must NOT already be testing someone
+    if (activeTests.has(user.id))
+      return interaction.reply({ content: "Finish your current test first", ephemeral: true });
 
-    const player = queue[0];
+    const player = queue.shift();
+
+    if (!player)
+      return interaction.reply({ content: "No players in queue", ephemeral: true });
+
     activeTests.set(player.id, user.id);
 
-    const modal = new ModalBuilder()
-      .setCustomId(`rank_${player.id}`)
-      .setTitle("Set Rank Result");
-
-    const input = new TextInputBuilder()
-      .setCustomId("rank")
-      .setLabel("Enter rank (LT5 - HT1)")
-      .setStyle(TextInputStyle.Short);
-
-    modal.addComponents(new ActionRowBuilder().addComponents(input));
-
-    return interaction.showModal(modal);
+    return interaction.reply({
+      content: `You are now testing <@${player.id}>`,
+      ephemeral: true
+    });
   }
 
-  // ================= MODAL =================
+  // ================= RANK SUBMIT =================
+  if (interaction.isButton()) return;
+
   if (interaction.isModalSubmit()) {
 
     const playerId = interaction.customId.split("_")[1];
-    const player = queue.find(p => p.id === playerId);
-
-    if (!player)
-      return interaction.reply({ content: "Player not found", ephemeral: true });
+    const player = { id: playerId };
 
     const rank = interaction.fields.getTextInputValue("rank");
 
-    queue.splice(queue.findIndex(p => p.id === playerId), 1);
     activeTests.delete(playerId);
 
     const results = interaction.guild.channels.cache.get(process.env.RESULTS_CHANNEL_ID);
 
     results?.send(
-`PLAYER: <@${player.id}>
+`PLAYER: <@${playerId}>
 TESTER: <@${interaction.user.id}>
 RANK: ${rank}`
     );
