@@ -4,7 +4,7 @@ const express = require("express");
 const app = express();
 
 app.get("/", (req, res) => res.send("Bot is alive"));
-app.listen(process.env.PORT || 3000);
+app.listen(process.env.PORT || 3000, () => console.log("Web server running"));
 
 const {
   Client,
@@ -32,27 +32,28 @@ const activeTests = new Map();
 const commands = [
   new SlashCommandBuilder()
     .setName("panel")
-    .setDescription("Open queue panel"),
+    .setDescription("Open the testing queue panel"),
 
   new SlashCommandBuilder()
     .setName("claim")
     .setDescription("Claim next player (TESTERS ONLY)")
-].map(c => c.toJSON());
+].map(cmd => cmd.toJSON());
 
-// ================= REGISTER COMMANDS =================
-const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
-
+// ================= REGISTER SLASH COMMANDS (GUILD MODE) =================
 client.once(Events.ClientReady, async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
+  const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+
   try {
     await rest.put(
-      Routes.applicationCommands(client.user.id),
+      Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID),
       { body: commands }
     );
-    console.log("Slash commands registered");
+
+    console.log("Guild slash commands registered instantly");
   } catch (err) {
-    console.error(err);
+    console.error("Slash command error:", err);
   }
 });
 
@@ -86,7 +87,7 @@ function panelButtons() {
   );
 }
 
-// ================= SLASH HANDLER =================
+// ================= INTERACTIONS =================
 client.on(Events.InteractionCreate, async (interaction) => {
 
   // ================= /PANEL =================
@@ -101,12 +102,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
   // ================= /CLAIM (TESTERS ONLY) =================
   if (interaction.isChatInputCommand() && interaction.commandName === "claim") {
 
-    // SIMPLE TESTER CHECK (YOU CAN ADD ROLE LATER)
-    const testerRoleName = "Tester";
+    const testerRole = "Tester";
 
-    if (!interaction.member.roles.cache.some(r => r.name === testerRoleName)) {
+    if (!interaction.member.roles.cache.some(r => r.name === testerRole)) {
       return interaction.reply({
-        content: "You are not a tester.",
+        content: "❌ You are not a tester.",
         ephemeral: true
       });
     }
@@ -123,7 +123,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     activeTests.set(player.id, interaction.user.id);
 
     return interaction.reply({
-      content: `You are now testing <@${player.id}>`,
+      content: `🧑‍⚖️ You are now testing <@${player.id}>`,
       ephemeral: true
     });
   }
