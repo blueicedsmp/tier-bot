@@ -4,7 +4,7 @@ const express = require("express");
 const app = express();
 
 app.get("/", (req, res) => res.send("Bot is alive"));
-app.listen(process.env.PORT || 3000);
+app.listen(process.env.PORT || 3000, () => console.log("Web server running"));
 
 const {
   Client,
@@ -21,7 +21,11 @@ const {
 
 // ================= BOT =================
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
 // ================= DATA =================
@@ -29,14 +33,17 @@ const queue = [];
 const activeTests = new Map();
 
 // ================= READY =================
-client.once(Events.ClientReady, async () => {
+client.once(Events.ClientReady, () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
 
-// ================= PANEL (MESSAGE COMMAND) =================
+// ================= DEBUG MESSAGE LOG =================
 client.on(Events.MessageCreate, async (message) => {
   if (!message.guild || message.author.bot) return;
 
+  console.log("MESSAGE SEEN:", message.content);
+
+  // ================= PANEL =================
   if (message.content === "!panel") {
 
     const row = new ActionRowBuilder().addComponents(
@@ -65,7 +72,7 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
-// ================= INTERACTIONS =================
+// ================= BUTTONS =================
 client.on(Events.InteractionCreate, async (interaction) => {
 
   if (!interaction.isButton() && !interaction.isModalSubmit()) return;
