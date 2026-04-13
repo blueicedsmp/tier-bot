@@ -4,7 +4,7 @@ const express = require("express");
 const app = express();
 
 app.get("/", (req, res) => res.send("Bot is alive"));
-app.listen(process.env.PORT || 3000, () => console.log("Web server running"));
+app.listen(process.env.PORT || 3000);
 
 const {
   Client,
@@ -28,18 +28,20 @@ const client = new Client({
 const queue = [];
 const activeTests = new Map();
 
-// ================= SLASH COMMANDS =================
+let panelMessage = null;
+
+// ================= COMMANDS =================
 const commands = [
   new SlashCommandBuilder()
     .setName("panel")
-    .setDescription("Open the testing queue panel"),
+    .setDescription("Open live queue panel"),
 
   new SlashCommandBuilder()
     .setName("claim")
-    .setDescription("Claim next player (TESTERS ONLY)")
-].map(cmd => cmd.toJSON());
+    .setDescription("Claim next player (testers only)")
+].map(c => c.toJSON());
 
-// ================= REGISTER SLASH COMMANDS (GUILD MODE) =================
+// ================= REGISTER COMMANDS =================
 client.once(Events.ClientReady, async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
@@ -50,29 +52,50 @@ client.once(Events.ClientReady, async () => {
       Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID),
       { body: commands }
     );
-
-    console.log("Guild slash commands registered instantly");
+    console.log("Slash commands registered");
   } catch (err) {
-    console.error("Slash command error:", err);
+    console.error(err);
   }
+
+  // AUTO REFRESH LOOP (REAL TIME UI)
+  setInterval(async () => {
+    try {
+      if (!panelMessage) return;
+
+      await panelMessage.edit({
+        embeds: [panelEmbed()],
+        components: [panelButtons()]
+      });
+    } catch (err) {
+      console.log("Panel update failed:", err.message);
+    }
+  }, 10000);
 });
 
-// ================= PANEL UI =================
+// ================= PANEL =================
 function panelEmbed() {
+
+  const queueList = queue.length
+    ? queue.map((p, i) => `${i + 1}. <@${p.id}>`).join("\n")
+    : "Empty";
+
+  const activeList = activeTests.size
+    ? Array.from(activeTests.entries())
+        .map(([player, tester]) => `<@${player}> → <@${tester}>`)
+        .join("\n")
+    : "None";
+
   return new EmbedBuilder()
-    .setTitle("🎮 Tier Testing Queue")
+    .setTitle("🎮 Tier Testing System")
     .setColor(0x00ff99)
-    .setDescription(
-      queue.length === 0
-        ? "No players in queue"
-        : queue.map((p, i) => `${i + 1}. <@${p.id}>`).join("\n")
-    )
     .addFields(
       { name: "Queue Size", value: `${queue.length}/20`, inline: true },
-      { name: "Active Tests", value: `${activeTests.size}`, inline: true }
+      { name: "Queue", value: queueList },
+      { name: "Active Tests", value: activeList }
     );
 }
 
+// ================= BUTTONS =================
 function panelButtons() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -87,19 +110,23 @@ function panelButtons() {
   );
 }
 
-// ================= INTERACTIONS =================
+// ================= EVENTS =================
 client.on(Events.InteractionCreate, async (interaction) => {
 
   // ================= /PANEL =================
   if (interaction.isChatInputCommand() && interaction.commandName === "panel") {
 
-    return interaction.reply({
+    const msg = await interaction.reply({
       embeds: [panelEmbed()],
-      components: [panelButtons()]
+      components: [panelButtons()],
+      fetchReply: true
     });
+
+    panelMessage = msg;
+    return;
   }
 
-  // ================= /CLAIM (TESTERS ONLY) =================
+  // ================= /CLAIM =================
   if (interaction.isChatInputCommand() && interaction.commandName === "claim") {
 
     const testerRole = "Tester";
