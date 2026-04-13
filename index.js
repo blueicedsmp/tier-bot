@@ -30,34 +30,52 @@ const activeTests = new Map();
 
 let panelMessage = null;
 
-// ================= COMMANDS =================
+// ================= CLEAN COMMANDS (ONLY ONES THAT EXIST) =================
 const commands = [
   new SlashCommandBuilder()
     .setName("panel")
-    .setDescription("Open live queue panel"),
+    .setDescription("Open the live queue panel"),
 
   new SlashCommandBuilder()
     .setName("claim")
-    .setDescription("Claim next player (testers only)")
+    .setDescription("Claim next player (testers only)"),
+
+  new SlashCommandBuilder()
+    .setName("finish")
+    .setDescription("Finish test and submit rank")
+    .addStringOption(opt =>
+      opt.setName("rank")
+        .setDescription("Rank earned (LT5 - HT1)")
+        .setRequired(true)
+    )
 ].map(c => c.toJSON());
 
-// ================= REGISTER COMMANDS =================
+// ================= REGISTER + WIPE OLD COMMANDS =================
 client.once(Events.ClientReady, async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
   const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
   try {
+    // WIPE OLD COMMANDS FIRST (THIS FIXES DUPLICATES)
+    await rest.put(
+      Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID),
+      { body: [] }
+    );
+
+    // ADD CLEAN COMMANDS ONLY
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID),
       { body: commands }
     );
-    console.log("Slash commands registered");
+
+    console.log("Clean slash commands registered");
+
   } catch (err) {
     console.error(err);
   }
 
-  // AUTO REFRESH LOOP (REAL TIME UI)
+  // LIVE PANEL UPDATE LOOP
   setInterval(async () => {
     try {
       if (!panelMessage) return;
@@ -67,12 +85,12 @@ client.once(Events.ClientReady, async () => {
         components: [panelButtons()]
       });
     } catch (err) {
-      console.log("Panel update failed:", err.message);
+      console.log("Panel update error:", err.message);
     }
   }, 10000);
 });
 
-// ================= PANEL =================
+// ================= PANEL UI =================
 function panelEmbed() {
 
   const queueList = queue.length
@@ -95,7 +113,6 @@ function panelEmbed() {
     );
 }
 
-// ================= BUTTONS =================
 function panelButtons() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -110,7 +127,7 @@ function panelButtons() {
   );
 }
 
-// ================= EVENTS =================
+// ================= INTERACTIONS =================
 client.on(Events.InteractionCreate, async (interaction) => {
 
   // ================= /PANEL =================
@@ -133,7 +150,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (!interaction.member.roles.cache.some(r => r.name === testerRole)) {
       return interaction.reply({
-        content: "❌ You are not a tester.",
+        content: "❌ Not a tester",
         ephemeral: true
       });
     }
@@ -142,7 +159,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (!player) {
       return interaction.reply({
-        content: "No players in queue.",
+        content: "No players in queue",
         ephemeral: true
       });
     }
@@ -155,12 +172,45 @@ client.on(Events.InteractionCreate, async (interaction) => {
     });
   }
 
+  // ================= /FINISH =================
+  if (interaction.isChatInputCommand() && interaction.commandName === "finish") {
+
+    const rank = interaction.options.getString("rank");
+
+    const entry = [...activeTests.entries()]
+      .find(([playerId, testerId]) => testerId === interaction.user.id);
+
+    if (!entry) {
+      return interaction.reply({
+        content: "❌ You are not testing anyone",
+        ephemeral: true
+      });
+    }
+
+    const [playerId] = entry;
+
+    activeTests.delete(playerId);
+
+    const channel = interaction.guild.channels.cache.get(process.env.RESULTS_CHANNEL_ID);
+
+    channel?.send(
+`🎮 TEST RESULT
+Player: <@${playerId}>
+Tester: <@${interaction.user.id}>
+Rank: ${rank}`
+    );
+
+    return interaction.reply({
+      content: `✅ Result submitted for <@${playerId}>`,
+      ephemeral: true
+    });
+  }
+
   // ================= BUTTONS =================
   if (!interaction.isButton()) return;
 
   const user = interaction.user;
 
-  // JOIN
   if (interaction.customId === "join") {
 
     if (queue.find(p => p.id === user.id))
@@ -174,7 +224,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return interaction.reply({ content: "Joined queue", ephemeral: true });
   }
 
-  // LEAVE
   if (interaction.customId === "leave") {
 
     const index = queue.findIndex(p => p.id === user.id);
