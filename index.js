@@ -30,52 +30,56 @@ const activeTests = new Map();
 
 let panelMessage = null;
 
-// ================= CLEAN COMMANDS (ONLY ONES THAT EXIST) =================
+// ================= ONLY CLEAN COMMANDS =================
 const commands = [
   new SlashCommandBuilder()
     .setName("panel")
-    .setDescription("Open the live queue panel"),
+    .setDescription("Open live queue panel"),
 
   new SlashCommandBuilder()
     .setName("claim")
-    .setDescription("Claim next player (testers only)"),
+    .setDescription("Claim next player (TESTERS ONLY)"),
 
   new SlashCommandBuilder()
     .setName("finish")
     .setDescription("Finish test and submit rank")
     .addStringOption(opt =>
       opt.setName("rank")
-        .setDescription("Rank earned (LT5 - HT1)")
+        .setDescription("Rank (LT5 - HT1)")
         .setRequired(true)
     )
 ].map(c => c.toJSON());
 
-// ================= REGISTER + WIPE OLD COMMANDS =================
+// ================= READY EVENT (FULL RESET) =================
 client.once(Events.ClientReady, async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
   const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
   try {
-    // WIPE OLD COMMANDS FIRST (THIS FIXES DUPLICATES)
+    // 🧹 WIPE ALL OLD COMMANDS
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID),
       { body: [] }
     );
 
-    // ADD CLEAN COMMANDS ONLY
+    console.log("🧹 Old commands wiped");
+
+    await new Promise(r => setTimeout(r, 2000));
+
+    // ✅ REGISTER CLEAN COMMANDS ONLY
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID),
       { body: commands }
     );
 
-    console.log("Clean slash commands registered");
+    console.log("✅ Clean commands registered");
 
   } catch (err) {
-    console.error(err);
+    console.error("Slash command error:", err);
   }
 
-  // LIVE PANEL UPDATE LOOP
+  // 🔄 LIVE PANEL REFRESH
   setInterval(async () => {
     try {
       if (!panelMessage) return;
@@ -90,7 +94,7 @@ client.once(Events.ClientReady, async () => {
   }, 10000);
 });
 
-// ================= PANEL UI =================
+// ================= PANEL =================
 function panelEmbed() {
 
   const queueList = queue.length
@@ -144,7 +148,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   // ================= /CLAIM =================
-  if (interaction.isChatInputCommand() && interaction.commandName === "claim") {
+  if (interaction.commandName === "claim") {
 
     const testerRole = "Tester";
 
@@ -173,7 +177,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   // ================= /FINISH =================
-  if (interaction.isChatInputCommand() && interaction.commandName === "finish") {
+  if (interaction.commandName === "finish") {
 
     const rank = interaction.options.getString("rank");
 
@@ -191,9 +195,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     activeTests.delete(playerId);
 
-    const channel = interaction.guild.channels.cache.get(process.env.RESULTS_CHANNEL_ID);
+    const results = interaction.guild.channels.cache.get(process.env.RESULTS_CHANNEL_ID);
 
-    channel?.send(
+    results?.send(
 `🎮 TEST RESULT
 Player: <@${playerId}>
 Tester: <@${interaction.user.id}>
