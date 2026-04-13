@@ -27,18 +27,17 @@ const client = new Client({
 // ================= DATA =================
 const queue = [];
 const activeTests = new Map();
-
 let panelMessage = null;
 
-// ================= ONLY CLEAN COMMANDS =================
+// ================= COMMANDS =================
 const commands = [
   new SlashCommandBuilder()
     .setName("panel")
-    .setDescription("Open live queue panel"),
+    .setDescription("Open the queue panel"),
 
   new SlashCommandBuilder()
     .setName("claim")
-    .setDescription("Claim next player (TESTERS ONLY)"),
+    .setDescription("Claim next player (testers only)"),
 
   new SlashCommandBuilder()
     .setName("finish")
@@ -50,36 +49,25 @@ const commands = [
     )
 ].map(c => c.toJSON());
 
-// ================= READY EVENT (FULL RESET) =================
+// ================= READY =================
 client.once(Events.ClientReady, async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
   const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
   try {
-    // 🧹 WIPE ALL OLD COMMANDS
-    await rest.put(
-      Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID),
-      { body: [] }
-    );
-
-    console.log("🧹 Old commands wiped");
-
-    await new Promise(r => setTimeout(r, 2000));
-
-    // ✅ REGISTER CLEAN COMMANDS ONLY
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID),
       { body: commands }
     );
 
-    console.log("✅ Clean commands registered");
+    console.log("✅ Commands registered");
 
   } catch (err) {
-    console.error("Slash command error:", err);
+    console.error(err);
   }
 
-  // 🔄 LIVE PANEL REFRESH
+  // 🔄 AUTO UPDATE PANEL
   setInterval(async () => {
     try {
       if (!panelMessage) return;
@@ -96,7 +84,6 @@ client.once(Events.ClientReady, async () => {
 
 // ================= PANEL =================
 function panelEmbed() {
-
   const queueList = queue.length
     ? queue.map((p, i) => `${i + 1}. <@${p.id}>`).join("\n")
     : "Empty";
@@ -134,7 +121,7 @@ function panelButtons() {
 // ================= INTERACTIONS =================
 client.on(Events.InteractionCreate, async (interaction) => {
 
-  // ================= /PANEL =================
+  // ===== /panel =====
   if (interaction.isChatInputCommand() && interaction.commandName === "panel") {
 
     const msg = await interaction.reply({
@@ -147,8 +134,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
-  // ================= /CLAIM =================
-  if (interaction.commandName === "claim") {
+  // ===== /claim =====
+  if (interaction.isChatInputCommand() && interaction.commandName === "claim") {
 
     const testerRole = "Tester";
 
@@ -176,8 +163,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     });
   }
 
-  // ================= /FINISH =================
-  if (interaction.commandName === "finish") {
+  // ===== /finish =====
+  if (interaction.isChatInputCommand() && interaction.commandName === "finish") {
 
     const rank = interaction.options.getString("rank");
 
@@ -210,7 +197,7 @@ Rank: ${rank}`
     });
   }
 
-  // ================= BUTTONS =================
+  // ===== BUTTONS =====
   if (!interaction.isButton()) return;
 
   const user = interaction.user;
