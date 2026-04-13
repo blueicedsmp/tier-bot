@@ -64,7 +64,7 @@ client.once(Events.ClientReady, async () => {
     console.log("✅ Commands registered");
 
   } catch (err) {
-    console.error(err);
+    console.error("Command error:", err);
   }
 
   // 🔄 AUTO UPDATE PANEL
@@ -184,7 +184,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     const results = interaction.guild.channels.cache.get(process.env.RESULTS_CHANNEL_ID);
 
-    results?.send(
+    if (!results) {
+      return interaction.reply({
+        content: "❌ Results channel not found",
+        ephemeral: true
+      });
+    }
+
+    await results.send(
 `🎮 TEST RESULT
 Player: <@${playerId}>
 Tester: <@${interaction.user.id}>
