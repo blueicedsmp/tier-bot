@@ -21,15 +21,16 @@ const {
 
 // ================= BOT =================
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
 // ================= DATA =================
 const queue = [];
 const activeTests = new Map();
-
-let lastResult = "None";
-let lastCancel = "None";
 
 // ================= COMMANDS =================
 const commands = [
@@ -57,47 +58,12 @@ client.once(Events.ClientReady, async () => {
 
   const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
-  try {
-    await rest.put(
-      Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID),
-      { body: commands }
-    );
+  await rest.put(
+    Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID),
+    { body: commands }
+  );
 
-    console.log("✅ Commands registered");
-  } catch (err) {
-    console.error(err);
-  }
-
-  // dashboard updater (simple)
-  setInterval(async () => {
-    const channel = client.channels.cache.get(process.env.DASHBOARD_CHANNEL_ID);
-    if (!channel) return;
-
-    const embed = new EmbedBuilder()
-      .setTitle("🎮 Staff Dashboard")
-      .setColor(0x00ff99)
-      .addFields(
-        { name: "Queue", value: `${queue.length}`, inline: true },
-        { name: "Active Tests", value: `${activeTests.size}`, inline: true },
-        {
-          name: "Active List",
-          value: activeTests.size
-            ? [...activeTests.entries()].map(([p, t]) => `<@${t}> → <@${p}>`).join("\n")
-            : "None"
-        },
-        { name: "Last Result", value: lastResult },
-        { name: "Last Cancel", value: lastCancel }
-      );
-
-    const msgs = await channel.messages.fetch({ limit: 1 });
-    const msg = msgs.first();
-
-    if (msg && msg.author.id === client.user.id) {
-      msg.edit({ embeds: [embed] });
-    } else {
-      channel.send({ embeds: [embed] });
-    }
-  }, 10000);
+  console.log("✅ Commands registered");
 });
 
 // ================= PANEL =================
@@ -127,20 +93,20 @@ function panelButtons() {
 // ================= INTERACTIONS =================
 client.on(Events.InteractionCreate, async (interaction) => {
 
-  // ===== PANEL =====
+  // ================= PANEL =================
   if (interaction.isChatInputCommand() && interaction.commandName === "panel") {
     return interaction.reply({
       embeds: [panelEmbed()],
-      components: [panelButtons()],
-      fetchReply: true
+      components: [panelButtons()]
     });
   }
 
-  // ===== JOIN =====
+  // ================= JOIN =================
   if (interaction.isButton() && interaction.customId === "join") {
 
-    if (queue.find(p => p.id === interaction.user.id))
+    if (queue.find(p => p.id === interaction.user.id)) {
       return interaction.reply({ content: "Already in queue", ephemeral: true });
+    }
 
     queue.push({ id: interaction.user.id });
 
@@ -150,12 +116,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     });
   }
 
-  // ===== LEAVE =====
+  // ================= LEAVE =================
   if (interaction.isButton() && interaction.customId === "leave") {
 
     const i = queue.findIndex(p => p.id === interaction.user.id);
-    if (i === -1)
+    if (i === -1) {
       return interaction.reply({ content: "Not in queue", ephemeral: true });
+    }
 
     queue.splice(i, 1);
 
@@ -169,21 +136,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isChatInputCommand() && interaction.commandName === "claim") {
 
     const testerRole = "Tester";
+
     if (!interaction.member.roles.cache.some(r => r.name === testerRole)) {
       return interaction.reply({ content: "❌ Not tester", ephemeral: true });
     }
 
-    const already = [...activeTests.values()].includes(interaction.user.id);
-    if (already) {
-      return interaction.reply({ content: "❌ Already testing someone", ephemeral: true });
+    const alreadyTesting = [...activeTests.values()]
+      .some(v => v.tester === interaction.user.id);
+
+    if (alreadyTesting) {
+      return interaction.reply({
+        content: "❌ Already testing someone",
+        ephemeral: true
+      });
     }
 
     const player = queue.shift();
-    if (!player) {
-      return interaction.reply({ content: "No queue", ephemeral: true });
-    }
 
-    activeTests.set(player.id, interaction.user.id);
+    if (!player) {
+      return interaction.reply({ content: "No players in queue", ephemeral: true });
+    }
 
     const guild = interaction.guild;
 
@@ -194,6 +166,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         { id: player.id, allow: ["ViewChannel", "SendMessages"] },
         { id: interaction.user.id, allow: ["ViewChannel", "SendMessages"] }
       ]
+    });
+
+    activeTests.set(player.id, {
+      tester: interaction.user.id,
+      channelId: channel.id
     });
 
     const row = new ActionRowBuilder().addComponents(
@@ -220,33 +197,36 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const rank = interaction.options.getString("rank");
 
     const entry = [...activeTests.entries()]
-      .find(([p, t]) => t === interaction.user.id);
+      .find(([playerId, data]) => data.tester === interaction.user.id);
 
-    if (!entry)
-      return interaction.reply({ content: "Not testing anyone", ephemeral: true });
+    if (!entry) {
+      return interaction.reply({
+        content: "❌ Not testing anyone",
+        ephemeral: true
+      });
+    }
 
-    const [playerId] = entry;
-    const channel = interaction.channel;
+    const [playerId, data] = entry;
 
-    await interaction.reply({
-      content: "Send: username | region | previous rank",
-      ephemeral: true
-    });
+    const filter = m => m.author.id === interaction.user.id;
 
-    const collected = await channel.awaitMessages({
-      max: 1,
-      time: 60000,
-      filter: m => m.author.id === interaction.user.id
-    });
+    await interaction.reply({ content: "🌍 Enter REGION:", ephemeral: true });
 
-    const input = collected.first()?.content.split("|") || [];
+    const region = (await interaction.channel.awaitMessages({ filter, max: 1, time: 60000 }))
+      .first()?.content || "Unknown";
 
-    const username = input[0]?.trim() || "Unknown";
-    const region = input[1]?.trim() || "Unknown";
-    const previousRank = input[2]?.trim() || "Unknown";
+    await interaction.followUp({ content: "👤 Enter USERNAME:", ephemeral: true });
 
-    const results = interaction.guild.channels.cache.get(process.env.RESULTS_CHANNEL_ID);
-    const logs = interaction.guild.channels.cache.get(process.env.TESTER_LOGS_CHANNEL_ID);
+    const username = (await interaction.channel.awaitMessages({ filter, max: 1, time: 60000 }))
+      .first()?.content || "Unknown";
+
+    await interaction.followUp({ content: "📊 Enter PREVIOUS RANK:", ephemeral: true });
+
+    const previousRank = (await interaction.channel.awaitMessages({ filter, max: 1, time: 60000 }))
+      .first()?.content || "Unknown";
+
+    const results = await interaction.guild.channels.fetch(process.env.RESULTS_CHANNEL_ID).catch(() => null);
+    const logs = await interaction.guild.channels.fetch(process.env.TESTER_LOGS_CHANNEL_ID).catch(() => null);
 
     const msg =
 `👤 <@${playerId}> TEST RESULT
@@ -259,44 +239,44 @@ Rank Earned: ${rank}`;
 
     if (results) results.send(msg);
 
-    lastResult = `${username} → ${rank}`;
-
-    if (logs) logs.send("🟢 SUCCESS\n\n" + msg);
+    if (logs) logs.send("🟢 SUCCESSFUL TEST\n\n" + msg);
 
     activeTests.delete(playerId);
 
-    setTimeout(() => channel.delete().catch(() => {}), 3000);
+    interaction.followUp({ content: "✅ Test completed", ephemeral: true });
+
+    setTimeout(() => {
+      interaction.channel.delete().catch(() => {});
+    }, 3000);
   }
 
   // ================= STOP TEST =================
   if (interaction.isButton() && interaction.customId === "stop_test") {
 
     const entry = [...activeTests.entries()]
-      .find(([p, t]) => t === interaction.user.id);
+      .find(([playerId, data]) => data.tester === interaction.user.id);
 
-    if (!entry)
-      return interaction.reply({ content: "Not your test", ephemeral: true });
+    if (!entry) {
+      return interaction.reply({ content: "❌ Not your test", ephemeral: true });
+    }
 
     const [playerId] = entry;
 
-    await interaction.reply({
-      content: "Type reason for cancel",
-      ephemeral: true
-    });
+    await interaction.reply({ content: "🛑 Type reason for cancel", ephemeral: true });
 
-    const collected = await interaction.channel.awaitMessages({
+    const filter = m => m.author.id === interaction.user.id;
+
+    const reason = (await interaction.channel.awaitMessages({
+      filter,
       max: 1,
-      time: 30000,
-      filter: m => m.author.id === interaction.user.id
-    });
+      time: 30000
+    })).first()?.content || "No reason";
 
-    const reason = collected.first()?.content || "No reason";
-
-    const logs = interaction.guild.channels.cache.get(process.env.TESTER_LOGS_CHANNEL_ID);
+    const logs = await interaction.guild.channels.fetch(process.env.TESTER_LOGS_CHANNEL_ID).catch(() => null);
 
     if (logs) {
       logs.send(
-`🛑 CANCELLED
+`🛑 CANCELLED TEST
 
 Tester: <@${interaction.user.id}>
 Player: <@${playerId}>
@@ -304,11 +284,11 @@ Reason: ${reason}`
       );
     }
 
-    lastCancel = `${playerId} (${reason})`;
-
     activeTests.delete(playerId);
 
-    setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
+    setTimeout(() => {
+      interaction.channel.delete().catch(() => {});
+    }, 3000);
   }
 });
 
