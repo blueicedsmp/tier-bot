@@ -56,7 +56,7 @@ client.once(Events.ClientReady, async () => {
 
   console.log("Commands registered");
 
-  // ===== DASHBOARD =====
+  // DASHBOARD
   setInterval(async () => {
     try {
       const channel = await client.channels.fetch(process.env.DASHBOARD_CHANNEL_ID).catch(() => null);
@@ -106,7 +106,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   try {
 
-    // ===== PANEL =====
+    // PANEL
     if (interaction.isChatInputCommand() && interaction.commandName === "panel") {
       return interaction.reply({
         embeds: [panelEmbed()],
@@ -114,7 +114,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
 
-    // ===== JOIN =====
+    // JOIN
     if (interaction.isButton() && interaction.customId === "join") {
 
       if (queue.find(p => p.id === interaction.user.id)) {
@@ -129,7 +129,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
 
-    // ===== LEAVE =====
+    // LEAVE
     if (interaction.isButton() && interaction.customId === "leave") {
 
       const i = queue.findIndex(p => p.id === interaction.user.id);
@@ -145,7 +145,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
 
-    // ===== CLAIM =====
+    // CLAIM
     if (interaction.isChatInputCommand() && interaction.commandName === "claim") {
 
       const player = queue.shift();
@@ -180,7 +180,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.reply({ content: "Test started", ephemeral: true });
     }
 
-    // ===== FINISH =====
+    // FINISH
     if (interaction.isChatInputCommand() && interaction.commandName === "finish") {
 
       await interaction.deferReply({ ephemeral: true });
@@ -194,7 +194,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.followUp({ content: "Not testing anyone", ephemeral: true });
       }
 
-      const [playerId, data] = entry;
+      const [playerId] = entry;
 
       const filter = m => m.author.id === interaction.user.id;
 
@@ -219,15 +219,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const username = await ask("👤 Enter USERNAME:");
       const previousRank = await ask("📊 Enter PREVIOUS RANK:");
 
-      let results, logs;
-
-      try {
-        results = await interaction.guild.channels.fetch(process.env.RESULTS_CHANNEL_ID);
-      } catch { console.log("❌ RESULTS CHANNEL ERROR"); }
-
-      try {
-        logs = await interaction.guild.channels.fetch(process.env.TESTER_LOGS_CHANNEL_ID);
-      } catch { console.log("❌ LOGS CHANNEL ERROR"); }
+      const results = await interaction.guild.channels.fetch(process.env.RESULTS_CHANNEL_ID).catch(() => null);
+      const logs = await interaction.guild.channels.fetch(process.env.TESTER_LOGS_CHANNEL_ID).catch(() => null);
 
       const msg =
 `👤 <@${playerId}> TEST RESULT
@@ -245,13 +238,10 @@ Rank Earned: ${rank}`;
 
       await interaction.followUp({ content: "✅ Test completed", ephemeral: true });
 
-      const testChannel = interaction.guild.channels.cache.get(data.channelId);
-      if (testChannel) {
-        setTimeout(() => testChannel.delete().catch(() => {}), 2000);
-      }
+      setTimeout(() => interaction.channel.delete().catch(() => {}), 2000);
     }
 
-    // ===== STOP TEST =====
+    // STOP TEST
     if (interaction.isButton() && interaction.customId === "stop_test") {
 
       await interaction.deferReply({ ephemeral: true });
@@ -263,7 +253,7 @@ Rank Earned: ${rank}`;
         return interaction.followUp({ content: "Not your test", ephemeral: true });
       }
 
-      const [playerId, data] = entry;
+      const [playerId] = entry;
 
       const filter = m => m.author.id === interaction.user.id;
 
@@ -282,32 +272,27 @@ Rank Earned: ${rank}`;
         reason = collected.first().content;
       } catch {}
 
-      let logs;
-      try {
-        logs = await interaction.guild.channels.fetch(process.env.TESTER_LOGS_CHANNEL_ID);
-      } catch { console.log("❌ LOGS ERROR"); }
+      const logs = await interaction.guild.channels.fetch(process.env.TESTER_LOGS_CHANNEL_ID).catch(() => null);
+      const ticketLogs = await interaction.guild.channels.fetch(process.env.TICKET_LOGS_CHANNEL_ID).catch(() => null);
 
-      if (logs) {
-        await logs.send(
+      const msg =
 `🛑 CANCELLED TEST
 
 Tester: <@${interaction.user.id}>
 Player: <@${playerId}>
-Reason: ${reason}`
-        );
-      }
+Reason: ${reason}`;
+
+      if (logs) await logs.send(msg);
+      if (ticketLogs) await ticketLogs.send(msg);
 
       activeTests.delete(playerId);
 
       await interaction.followUp({ content: "❌ Test cancelled", ephemeral: true });
 
-      const testChannel = interaction.guild.channels.cache.get(data.channelId);
-      if (testChannel) {
-        setTimeout(() => testChannel.delete().catch(() => {}), 2000);
-      }
+      setTimeout(() => interaction.channel.delete().catch(() => {}), 2000);
     }
 
-    // ===== CLOSE TICKET =====
+    // CLOSE TICKET
     if (interaction.isButton() && interaction.customId === "close_ticket") {
 
       await interaction.deferReply({ ephemeral: true });
@@ -319,16 +304,23 @@ Reason: ${reason}`
         return interaction.followUp({ content: "Only tester can close", ephemeral: true });
       }
 
-      const [playerId, data] = entry;
+      const [playerId] = entry;
+
+      const ticketLogs = await interaction.guild.channels.fetch(process.env.TICKET_LOGS_CHANNEL_ID).catch(() => null);
+
+      const msg =
+`📁 TICKET CLOSED
+
+Tester: <@${interaction.user.id}>
+Player: <@${playerId}>`;
+
+      if (ticketLogs) await ticketLogs.send(msg);
 
       activeTests.delete(playerId);
 
       await interaction.followUp({ content: "✅ Ticket closed", ephemeral: true });
 
-      const testChannel = interaction.guild.channels.cache.get(data.channelId);
-      if (testChannel) {
-        setTimeout(() => testChannel.delete().catch(() => {}), 2000);
-      }
+      setTimeout(() => interaction.channel.delete().catch(() => {}), 2000);
     }
 
   } catch (err) {
