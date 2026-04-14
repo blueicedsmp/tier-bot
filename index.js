@@ -163,8 +163,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
 
       activeTests.set(player.id, {
-        tester: interaction.user.id,
-        channelId: channel.id
+        tester: interaction.user.id
       });
 
       const row = new ActionRowBuilder().addComponents(
@@ -205,25 +204,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const collected = await interaction.channel.awaitMessages({
             filter,
             max: 1,
-            time: 60000,
-            errors: ["time"]
+            time: 60000
           });
 
-          return collected.first().content.trim();
+          return collected.first()?.content || "No response";
         } catch {
           return "No response";
         }
       };
 
-      const region = await ask("🌍 Enter REGION:");
-      const username = await ask("👤 Enter USERNAME:");
-      const previousRank = await ask("📊 Enter PREVIOUS RANK:");
+      const region = await ask("🌍 Region:");
+      const username = await ask("👤 Username:");
+      const previousRank = await ask("📊 Previous rank:");
 
       const results = await interaction.guild.channels.fetch(process.env.RESULTS_CHANNEL_ID).catch(() => null);
       const logs = await interaction.guild.channels.fetch(process.env.TESTER_LOGS_CHANNEL_ID).catch(() => null);
 
       const msg =
-`👤 <@${playerId}> TEST RESULT
+`👤 <@${playerId}>
 
 Tester: <@${interaction.user.id}>
 Region: ${region}
@@ -236,28 +234,26 @@ Rank Earned: ${rank}`;
 
       activeTests.delete(playerId);
 
-      await interaction.followUp({ content: "✅ Test completed", ephemeral: true });
+      await interaction.followUp({ content: "✅ Test finished", ephemeral: true });
 
-      setTimeout(() => interaction.channel.delete().catch(() => {}), 2000);
+      setTimeout(() => interaction.channel.delete().catch(() => {}), 1500);
     }
 
     // STOP TEST
     if (interaction.isButton() && interaction.customId === "stop_test") {
 
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.reply({ content: "🛑 Type cancel reason in chat", ephemeral: true });
 
       const entry = [...activeTests.entries()]
         .find(([p, v]) => v.tester === interaction.user.id);
 
       if (!entry) {
-        return interaction.followUp({ content: "Not your test", ephemeral: true });
+        return interaction.editReply({ content: "❌ Not your test" });
       }
 
       const [playerId] = entry;
 
       const filter = m => m.author.id === interaction.user.id;
-
-      await interaction.followUp({ content: "🛑 Enter cancel reason:", ephemeral: true });
 
       let reason = "No response";
 
@@ -265,62 +261,55 @@ Rank Earned: ${rank}`;
         const collected = await interaction.channel.awaitMessages({
           filter,
           max: 1,
-          time: 30000,
-          errors: ["time"]
+          time: 30000
         });
 
-        reason = collected.first().content;
+        if (collected.first()) reason = collected.first().content;
       } catch {}
 
-      const logs = await interaction.guild.channels.fetch(process.env.TESTER_LOGS_CHANNEL_ID).catch(() => null);
-      const ticketLogs = await interaction.guild.channels.fetch(process.env.TICKET_LOGS_CHANNEL_ID).catch(() => null);
+      try {
+        const logs = await interaction.guild.channels.fetch(process.env.TESTER_LOGS_CHANNEL_ID);
+        if (logs) await logs.send(`🛑 CANCELLED TEST\nTester: <@${interaction.user.id}>\nPlayer: <@${playerId}>\nReason: ${reason}`);
+      } catch {}
 
-      const msg =
-`🛑 CANCELLED TEST
-
-Tester: <@${interaction.user.id}>
-Player: <@${playerId}>
-Reason: ${reason}`;
-
-      if (logs) await logs.send(msg);
-      if (ticketLogs) await ticketLogs.send(msg);
+      try {
+        const ticketLogs = await interaction.guild.channels.fetch(process.env.TICKET_LOGS_CHANNEL_ID);
+        if (ticketLogs) await ticketLogs.send(`🛑 CANCELLED TEST\nTester: <@${interaction.user.id}>\nPlayer: <@${playerId}>\nReason: ${reason}`);
+      } catch {}
 
       activeTests.delete(playerId);
 
-      await interaction.followUp({ content: "❌ Test cancelled", ephemeral: true });
+      await interaction.editReply({ content: "❌ Test cancelled" });
 
-      setTimeout(() => interaction.channel.delete().catch(() => {}), 2000);
+      setTimeout(() => interaction.channel.delete().catch(() => {}), 1500);
     }
 
     // CLOSE TICKET
     if (interaction.isButton() && interaction.customId === "close_ticket") {
 
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.reply({ content: "🔒 Closing ticket...", ephemeral: true });
 
       const entry = [...activeTests.entries()]
         .find(([p, v]) => v.tester === interaction.user.id);
 
       if (!entry) {
-        return interaction.followUp({ content: "Only tester can close", ephemeral: true });
+        return interaction.editReply({ content: "❌ Only tester can close" });
       }
 
       const [playerId] = entry;
 
-      const ticketLogs = await interaction.guild.channels.fetch(process.env.TICKET_LOGS_CHANNEL_ID).catch(() => null);
-
-      const msg =
-`📁 TICKET CLOSED
-
-Tester: <@${interaction.user.id}>
-Player: <@${playerId}>`;
-
-      if (ticketLogs) await ticketLogs.send(msg);
+      try {
+        const ticketLogs = await interaction.guild.channels.fetch(process.env.TICKET_LOGS_CHANNEL_ID);
+        if (ticketLogs) {
+          await ticketLogs.send(`📁 TICKET CLOSED\nTester: <@${interaction.user.id}>\nPlayer: <@${playerId}>`);
+        }
+      } catch {}
 
       activeTests.delete(playerId);
 
-      await interaction.followUp({ content: "✅ Ticket closed", ephemeral: true });
+      await interaction.editReply({ content: "✅ Ticket closed" });
 
-      setTimeout(() => interaction.channel.delete().catch(() => {}), 2000);
+      setTimeout(() => interaction.channel.delete().catch(() => {}), 1000);
     }
 
   } catch (err) {
