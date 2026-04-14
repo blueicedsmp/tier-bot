@@ -19,7 +19,6 @@ const {
   ButtonStyle
 } = require("discord.js");
 
-// ================= BOT =================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -80,6 +79,7 @@ client.once(Events.ClientReady, async () => {
       } else {
         await channel.send({ embeds: [embed] });
       }
+
     } catch (err) {
       console.log("Dashboard error:", err);
     }
@@ -168,10 +168,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
 
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("stop_test")
-          .setLabel("🛑 Stop Test")
-          .setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId("stop_test").setLabel("🛑 Stop Test").setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId("close_ticket").setLabel("✅ Close Ticket").setStyle(ButtonStyle.Success)
       );
 
       await channel.send({
@@ -203,21 +201,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const ask = async (q) => {
         await interaction.followUp({ content: q, ephemeral: true });
 
-        const collected = await interaction.channel.awaitMessages({
-          filter,
-          max: 1,
-          time: 60000
-        });
+        try {
+          const collected = await interaction.channel.awaitMessages({
+            filter,
+            max: 1,
+            time: 60000,
+            errors: ["time"]
+          });
 
-        return collected.first()?.content?.trim() || "Unknown";
+          return collected.first().content.trim();
+        } catch {
+          return "No response";
+        }
       };
 
       const region = await ask("🌍 Enter REGION:");
       const username = await ask("👤 Enter USERNAME:");
       const previousRank = await ask("📊 Enter PREVIOUS RANK:");
 
-      const results = await interaction.guild.channels.fetch(process.env.RESULTS_CHANNEL_ID).catch(() => null);
-      const logs = await interaction.guild.channels.fetch(process.env.TESTER_LOGS_CHANNEL_ID).catch(() => null);
+      let results, logs;
+
+      try {
+        results = await interaction.guild.channels.fetch(process.env.RESULTS_CHANNEL_ID);
+      } catch { console.log("❌ RESULTS CHANNEL ERROR"); }
+
+      try {
+        logs = await interaction.guild.channels.fetch(process.env.TESTER_LOGS_CHANNEL_ID);
+      } catch { console.log("❌ LOGS CHANNEL ERROR"); }
 
       const msg =
 `👤 <@${playerId}> TEST RESULT
@@ -259,15 +269,23 @@ Rank Earned: ${rank}`;
 
       await interaction.followUp({ content: "🛑 Enter cancel reason:", ephemeral: true });
 
-      const collected = await interaction.channel.awaitMessages({
-        filter,
-        max: 1,
-        time: 30000
-      });
+      let reason = "No response";
 
-      const reason = collected.first()?.content || "No reason";
+      try {
+        const collected = await interaction.channel.awaitMessages({
+          filter,
+          max: 1,
+          time: 30000,
+          errors: ["time"]
+        });
 
-      const logs = await interaction.guild.channels.fetch(process.env.TESTER_LOGS_CHANNEL_ID).catch(() => null);
+        reason = collected.first().content;
+      } catch {}
+
+      let logs;
+      try {
+        logs = await interaction.guild.channels.fetch(process.env.TESTER_LOGS_CHANNEL_ID);
+      } catch { console.log("❌ LOGS ERROR"); }
 
       if (logs) {
         await logs.send(
@@ -289,8 +307,32 @@ Reason: ${reason}`
       }
     }
 
+    // ===== CLOSE TICKET =====
+    if (interaction.isButton() && interaction.customId === "close_ticket") {
+
+      await interaction.deferReply({ ephemeral: true });
+
+      const entry = [...activeTests.entries()]
+        .find(([p, v]) => v.tester === interaction.user.id);
+
+      if (!entry) {
+        return interaction.followUp({ content: "Only tester can close", ephemeral: true });
+      }
+
+      const [playerId, data] = entry;
+
+      activeTests.delete(playerId);
+
+      await interaction.followUp({ content: "✅ Ticket closed", ephemeral: true });
+
+      const testChannel = interaction.guild.channels.cache.get(data.channelId);
+      if (testChannel) {
+        setTimeout(() => testChannel.delete().catch(() => {}), 2000);
+      }
+    }
+
   } catch (err) {
-    console.error("Interaction error:", err);
+    console.error("ERROR:", err);
   }
 });
 
