@@ -27,11 +27,14 @@ const client = new Client({
   ]
 });
 
-// ================= DATA =================
+// ===== CONFIG =====
+const TESTER_ROLE_ID = "1312062480188440649";
+
+// ===== DATA =====
 const queue = [];
 const activeTests = new Map();
 
-// ================= COMMANDS =================
+// ===== COMMANDS =====
 const commands = [
   new SlashCommandBuilder().setName("panel").setDescription("Queue panel"),
   new SlashCommandBuilder().setName("claim").setDescription("Claim player"),
@@ -43,7 +46,7 @@ const commands = [
     )
 ].map(c => c.toJSON());
 
-// ================= READY =================
+// ===== READY =====
 client.once(Events.ClientReady, async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
@@ -55,38 +58,9 @@ client.once(Events.ClientReady, async () => {
   );
 
   console.log("Commands registered");
-
-  // DASHBOARD
-  setInterval(async () => {
-    try {
-      const channel = await client.channels.fetch(process.env.DASHBOARD_CHANNEL_ID).catch(() => null);
-      if (!channel) return;
-
-      const embed = new EmbedBuilder()
-        .setTitle("🎮 Dashboard")
-        .setColor(0x00ff99)
-        .addFields(
-          { name: "Queue", value: `${queue.length}`, inline: true },
-          { name: "Active Tests", value: `${activeTests.size}`, inline: true }
-        )
-        .setTimestamp();
-
-      const msgs = await channel.messages.fetch({ limit: 1 });
-      const last = msgs.first();
-
-      if (last && last.author.id === client.user.id) {
-        await last.edit({ embeds: [embed] });
-      } else {
-        await channel.send({ embeds: [embed] });
-      }
-
-    } catch (err) {
-      console.log("Dashboard error:", err);
-    }
-  }, 10000);
 });
 
-// ================= PANEL =================
+// ===== PANEL =====
 function panelEmbed() {
   return new EmbedBuilder()
     .setTitle("🎮 Queue System")
@@ -101,12 +75,12 @@ function panelButtons() {
   );
 }
 
-// ================= INTERACTIONS =================
+// ===== INTERACTIONS =====
 client.on(Events.InteractionCreate, async (interaction) => {
 
   try {
 
-    // PANEL
+    // ===== PANEL =====
     if (interaction.isChatInputCommand() && interaction.commandName === "panel") {
       return interaction.reply({
         embeds: [panelEmbed()],
@@ -114,7 +88,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
 
-    // JOIN
+    // ===== JOIN =====
     if (interaction.isButton() && interaction.customId === "join") {
 
       if (queue.find(p => p.id === interaction.user.id)) {
@@ -129,7 +103,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
 
-    // LEAVE
+    // ===== LEAVE =====
     if (interaction.isButton() && interaction.customId === "leave") {
 
       const i = queue.findIndex(p => p.id === interaction.user.id);
@@ -145,8 +119,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
 
-    // CLAIM
+    // ===== CLAIM (TESTERS ONLY) =====
     if (interaction.isChatInputCommand() && interaction.commandName === "claim") {
+
+      if (!interaction.member.roles.cache.has(TESTER_ROLE_ID)) {
+        return interaction.reply({ content: "❌ Testers only", ephemeral: true });
+      }
 
       const player = queue.shift();
       if (!player) {
@@ -158,7 +136,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         permissionOverwrites: [
           { id: interaction.guild.roles.everyone, deny: ["ViewChannel"] },
           { id: player.id, allow: ["ViewChannel", "SendMessages"] },
-          { id: interaction.user.id, allow: ["ViewChannel", "SendMessages"] }
+          { id: interaction.user.id, allow: ["ViewChannel", "SendMessages"] },
+          { id: TESTER_ROLE_ID, allow: ["ViewChannel"] } // testers can see
         ]
       });
 
@@ -179,7 +158,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.reply({ content: "Test started", ephemeral: true });
     }
 
-    // FINISH
+    // ===== FINISH =====
     if (interaction.isChatInputCommand() && interaction.commandName === "finish") {
 
       await interaction.deferReply({ ephemeral: true });
@@ -239,7 +218,7 @@ Rank Earned: ${rank}`;
       setTimeout(() => interaction.channel.delete().catch(() => {}), 1500);
     }
 
-    // STOP TEST
+    // ===== STOP TEST =====
     if (interaction.isButton() && interaction.customId === "stop_test") {
 
       await interaction.reply({ content: "🛑 Type cancel reason in chat", ephemeral: true });
@@ -272,11 +251,6 @@ Rank Earned: ${rank}`;
         if (logs) await logs.send(`🛑 CANCELLED TEST\nTester: <@${interaction.user.id}>\nPlayer: <@${playerId}>\nReason: ${reason}`);
       } catch {}
 
-      try {
-        const ticketLogs = await interaction.guild.channels.fetch(process.env.TICKET_LOGS_CHANNEL_ID);
-        if (ticketLogs) await ticketLogs.send(`🛑 CANCELLED TEST\nTester: <@${interaction.user.id}>\nPlayer: <@${playerId}>\nReason: ${reason}`);
-      } catch {}
-
       activeTests.delete(playerId);
 
       await interaction.editReply({ content: "❌ Test cancelled" });
@@ -284,7 +258,7 @@ Rank Earned: ${rank}`;
       setTimeout(() => interaction.channel.delete().catch(() => {}), 1500);
     }
 
-    // CLOSE TICKET
+    // ===== CLOSE TICKET =====
     if (interaction.isButton() && interaction.customId === "close_ticket") {
 
       await interaction.reply({ content: "🔒 Closing ticket...", ephemeral: true });
