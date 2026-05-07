@@ -16,7 +16,8 @@ const {
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle
+  ButtonStyle,
+  PermissionFlagsBits
 } = require("discord.js");
 
 const client = new Client({
@@ -28,7 +29,7 @@ const client = new Client({
 });
 
 // ===== CONFIG =====
-const TESTER_ROLE_ID = "1312062480188440649";
+const TESTER_ROLE_ID = process.env.TESTER_ROLE_ID;
 
 // ===== DATA =====
 const queue = [];
@@ -36,43 +37,81 @@ const activeTests = new Map();
 
 // ===== COMMANDS =====
 const commands = [
-  new SlashCommandBuilder().setName("panel").setDescription("Queue panel"),
-  new SlashCommandBuilder().setName("claim").setDescription("Claim player"),
+  new SlashCommandBuilder()
+    .setName("panel")
+    .setDescription("Queue panel"),
+
+  new SlashCommandBuilder()
+    .setName("claim")
+    .setDescription("Claim player"),
+
   new SlashCommandBuilder()
     .setName("finish")
     .setDescription("Finish test")
     .addStringOption(opt =>
-      opt.setName("rank").setDescription("Rank earned").setRequired(true)
+      opt
+        .setName("rank")
+        .setDescription("Rank earned")
+        .setRequired(true)
     )
+
 ].map(c => c.toJSON());
 
 // ===== READY =====
 client.once(Events.ClientReady, async () => {
+
   console.log(`Logged in as ${client.user.tag}`);
 
-  const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+  try {
 
-  await rest.put(
-    Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID),
-    { body: commands }
-  );
+    const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
-  console.log("Commands registered");
+    await rest.put(
+      Routes.applicationGuildCommands(
+        client.user.id,
+        process.env.GUILD_ID
+      ),
+      { body: commands }
+    );
+
+    console.log("✅ Commands registered");
+
+  } catch (err) {
+    console.error("❌ Command registration failed:", err);
+  }
+
 });
 
-// ===== PANEL =====
+// ===== PANEL EMBED =====
 function panelEmbed() {
+
   return new EmbedBuilder()
     .setTitle("🎮 Queue System")
     .setColor(0x00ff99)
-    .addFields({ name: "Players in queue", value: `${queue.length}` });
+    .addFields({
+      name: "Players in queue",
+      value: `${queue.length}`
+    });
+
 }
 
+// ===== PANEL BUTTONS =====
 function panelButtons() {
+
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("join").setLabel("Join Queue").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId("leave").setLabel("Leave Queue").setStyle(ButtonStyle.Danger)
+
+    new ButtonBuilder()
+      .setCustomId("join")
+      .setLabel("Join Queue")
+      .setStyle(ButtonStyle.Success),
+
+    new ButtonBuilder()
+      .setCustomId("leave")
+      .setLabel("Leave Queue")
+      .setStyle(ButtonStyle.Danger)
+
   );
+
 }
 
 // ===== INTERACTIONS =====
@@ -80,65 +119,135 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   try {
 
-    // ===== PANEL =====
-    if (interaction.isChatInputCommand() && interaction.commandName === "panel") {
+    // ===== /PANEL =====
+    if (
+      interaction.isChatInputCommand() &&
+      interaction.commandName === "panel"
+    ) {
+
       return interaction.reply({
         embeds: [panelEmbed()],
         components: [panelButtons()]
       });
+
     }
 
     // ===== JOIN =====
-    if (interaction.isButton() && interaction.customId === "join") {
+    if (
+      interaction.isButton() &&
+      interaction.customId === "join"
+    ) {
 
       if (queue.find(p => p.id === interaction.user.id)) {
-        return interaction.reply({ content: "Already in queue", ephemeral: true });
+
+        return interaction.reply({
+          content: "❌ Already in queue",
+          ephemeral: true
+        });
+
       }
 
-      queue.push({ id: interaction.user.id });
+      queue.push({
+        id: interaction.user.id
+      });
 
       return interaction.reply({
-        content: `Joined queue (#${queue.length})`,
+        content: `✅ Joined queue (#${queue.length})`,
         ephemeral: true
       });
+
     }
 
     // ===== LEAVE =====
-    if (interaction.isButton() && interaction.customId === "leave") {
+    if (
+      interaction.isButton() &&
+      interaction.customId === "leave"
+    ) {
 
-      const i = queue.findIndex(p => p.id === interaction.user.id);
-      if (i === -1) {
-        return interaction.reply({ content: "Not in queue", ephemeral: true });
+      const index = queue.findIndex(
+        p => p.id === interaction.user.id
+      );
+
+      if (index === -1) {
+
+        return interaction.reply({
+          content: "❌ Not in queue",
+          ephemeral: true
+        });
+
       }
 
-      queue.splice(i, 1);
+      queue.splice(index, 1);
 
       return interaction.reply({
-        content: "Left queue",
+        content: "✅ Left queue",
         ephemeral: true
       });
+
     }
 
-    // ===== CLAIM (TESTERS ONLY) =====
-    if (interaction.isChatInputCommand() && interaction.commandName === "claim") {
+    // ===== CLAIM =====
+    if (
+      interaction.isChatInputCommand() &&
+      interaction.commandName === "claim"
+    ) {
 
-      if (!interaction.member.roles.cache.has(TESTER_ROLE_ID)) {
-        return interaction.reply({ content: "❌ Testers only", ephemeral: true });
+      if (
+        !interaction.member.roles.cache.has(TESTER_ROLE_ID)
+      ) {
+
+        return interaction.reply({
+          content: "❌ Testers only",
+          ephemeral: true
+        });
+
       }
 
       const player = queue.shift();
+
       if (!player) {
-        return interaction.reply({ content: "No players in queue", ephemeral: true });
+
+        return interaction.reply({
+          content: "❌ No players in queue",
+          ephemeral: true
+        });
+
       }
 
       const channel = await interaction.guild.channels.create({
+
         name: `test-${player.id}`,
+
         permissionOverwrites: [
-          { id: interaction.guild.roles.everyone, deny: ["ViewChannel"] },
-          { id: player.id, allow: ["ViewChannel", "SendMessages"] },
-          { id: interaction.user.id, allow: ["ViewChannel", "SendMessages"] },
-          { id: TESTER_ROLE_ID, allow: ["ViewChannel"] } // testers can see
+
+          {
+            id: interaction.guild.roles.everyone,
+            deny: [PermissionFlagsBits.ViewChannel]
+          },
+
+          {
+            id: player.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages
+            ]
+          },
+
+          {
+            id: interaction.user.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages
+            ]
+          },
+
+          {
+            id: TESTER_ROLE_ID,
+            allow: [PermissionFlagsBits.ViewChannel]
+          }
+
         ]
+
       });
 
       activeTests.set(player.id, {
@@ -146,8 +255,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
 
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId("stop_test").setLabel("🛑 Stop Test").setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId("close_ticket").setLabel("✅ Close Ticket").setStyle(ButtonStyle.Success)
+
+        new ButtonBuilder()
+          .setCustomId("stop_test")
+          .setLabel("🛑 Stop Test")
+          .setStyle(ButtonStyle.Danger),
+
+        new ButtonBuilder()
+          .setCustomId("close_ticket")
+          .setLabel("✅ Close Ticket")
+          .setStyle(ButtonStyle.Success)
+
       );
 
       await channel.send({
@@ -155,51 +273,86 @@ client.on(Events.InteractionCreate, async (interaction) => {
         components: [row]
       });
 
-      return interaction.reply({ content: "Test started", ephemeral: true });
+      return interaction.reply({
+        content: "✅ Test started",
+        ephemeral: true
+      });
+
     }
 
     // ===== FINISH =====
-    if (interaction.isChatInputCommand() && interaction.commandName === "finish") {
+    if (
+      interaction.isChatInputCommand() &&
+      interaction.commandName === "finish"
+    ) {
 
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({
+        ephemeral: true
+      });
 
       const rank = interaction.options.getString("rank");
 
       const entry = [...activeTests.entries()]
-        .find(([p, v]) => v.tester === interaction.user.id);
+        .find(([p, v]) =>
+          v.tester === interaction.user.id
+        );
 
       if (!entry) {
-        return interaction.followUp({ content: "Not testing anyone", ephemeral: true });
+
+        return interaction.followUp({
+          content: "❌ Not testing anyone",
+          ephemeral: true
+        });
+
       }
 
       const [playerId] = entry;
 
-      const filter = m => m.author.id === interaction.user.id;
+      const filter = m =>
+        m.author.id === interaction.user.id;
 
-      const ask = async (q) => {
-        await interaction.followUp({ content: q, ephemeral: true });
+      const ask = async (question) => {
+
+        await interaction.followUp({
+          content: question,
+          ephemeral: true
+        });
 
         try {
-          const collected = await interaction.channel.awaitMessages({
-            filter,
-            max: 1,
-            time: 60000
-          });
+
+          const collected =
+            await interaction.channel.awaitMessages({
+              filter,
+              max: 1,
+              time: 60000
+            });
 
           return collected.first()?.content || "No response";
+
         } catch {
+
           return "No response";
+
         }
+
       };
 
       const region = await ask("🌍 Region:");
       const username = await ask("👤 Username:");
       const previousRank = await ask("📊 Previous rank:");
 
-      const results = await interaction.guild.channels.fetch(process.env.RESULTS_CHANNEL_ID).catch(() => null);
-      const logs = await interaction.guild.channels.fetch(process.env.TESTER_LOGS_CHANNEL_ID).catch(() => null);
+      const results =
+        await interaction.guild.channels
+          .fetch(process.env.RESULTS_CHANNEL_ID)
+          .catch(() => null);
 
-      const msg =
+      const logs =
+        await interaction.guild.channels
+          .fetch(process.env.TESTER_LOGS_CHANNEL_ID)
+          .catch(() => null);
+
+      const message =
+
 `👤 <@${playerId}>
 
 Tester: <@${interaction.user.id}>
@@ -208,87 +361,170 @@ Username: ${username}
 Previous Rank: ${previousRank}
 Rank Earned: ${rank}`;
 
-      if (results) await results.send(msg);
-      if (logs) await logs.send("🟢 SUCCESSFUL TEST\n\n" + msg);
+      if (results) await results.send(message);
+
+      if (logs) {
+        await logs.send(
+          "🟢 SUCCESSFUL TEST\n\n" + message
+        );
+      }
 
       activeTests.delete(playerId);
 
-      await interaction.followUp({ content: "✅ Test finished", ephemeral: true });
+      await interaction.followUp({
+        content: "✅ Test finished",
+        ephemeral: true
+      });
 
-      setTimeout(() => interaction.channel.delete().catch(() => {}), 1500);
+      setTimeout(() => {
+        interaction.channel.delete().catch(() => {});
+      }, 1500);
+
     }
 
     // ===== STOP TEST =====
-    if (interaction.isButton() && interaction.customId === "stop_test") {
+    if (
+      interaction.isButton() &&
+      interaction.customId === "stop_test"
+    ) {
 
-      await interaction.reply({ content: "🛑 Type cancel reason in chat", ephemeral: true });
+      await interaction.reply({
+        content: "🛑 Type cancel reason in chat",
+        ephemeral: true
+      });
 
       const entry = [...activeTests.entries()]
-        .find(([p, v]) => v.tester === interaction.user.id);
+        .find(([p, v]) =>
+          v.tester === interaction.user.id
+        );
 
       if (!entry) {
-        return interaction.editReply({ content: "❌ Not your test" });
+
+        return interaction.editReply({
+          content: "❌ Not your test"
+        });
+
       }
 
       const [playerId] = entry;
 
-      const filter = m => m.author.id === interaction.user.id;
+      const filter = m =>
+        m.author.id === interaction.user.id;
 
       let reason = "No response";
 
       try {
-        const collected = await interaction.channel.awaitMessages({
-          filter,
-          max: 1,
-          time: 30000
-        });
 
-        if (collected.first()) reason = collected.first().content;
+        const collected =
+          await interaction.channel.awaitMessages({
+            filter,
+            max: 1,
+            time: 30000
+          });
+
+        if (collected.first()) {
+          reason = collected.first().content;
+        }
+
       } catch {}
 
       try {
-        const logs = await interaction.guild.channels.fetch(process.env.TESTER_LOGS_CHANNEL_ID);
-        if (logs) await logs.send(`🛑 CANCELLED TEST\nTester: <@${interaction.user.id}>\nPlayer: <@${playerId}>\nReason: ${reason}`);
+
+        const logs =
+          await interaction.guild.channels.fetch(
+            process.env.TESTER_LOGS_CHANNEL_ID
+          );
+
+        if (logs) {
+
+          await logs.send(
+`🛑 CANCELLED TEST
+
+Tester: <@${interaction.user.id}>
+Player: <@${playerId}>
+Reason: ${reason}`
+          );
+
+        }
+
       } catch {}
 
       activeTests.delete(playerId);
 
-      await interaction.editReply({ content: "❌ Test cancelled" });
+      await interaction.editReply({
+        content: "❌ Test cancelled"
+      });
 
-      setTimeout(() => interaction.channel.delete().catch(() => {}), 1500);
+      setTimeout(() => {
+        interaction.channel.delete().catch(() => {});
+      }, 1500);
+
     }
 
     // ===== CLOSE TICKET =====
-    if (interaction.isButton() && interaction.customId === "close_ticket") {
+    if (
+      interaction.isButton() &&
+      interaction.customId === "close_ticket"
+    ) {
 
-      await interaction.reply({ content: "🔒 Closing ticket...", ephemeral: true });
+      await interaction.reply({
+        content: "🔒 Closing ticket...",
+        ephemeral: true
+      });
 
       const entry = [...activeTests.entries()]
-        .find(([p, v]) => v.tester === interaction.user.id);
+        .find(([p, v]) =>
+          v.tester === interaction.user.id
+        );
 
       if (!entry) {
-        return interaction.editReply({ content: "❌ Only tester can close" });
+
+        return interaction.editReply({
+          content: "❌ Only tester can close"
+        });
+
       }
 
       const [playerId] = entry;
 
       try {
-        const ticketLogs = await interaction.guild.channels.fetch(process.env.TICKET_LOGS_CHANNEL_ID);
+
+        const ticketLogs =
+          await interaction.guild.channels.fetch(
+            process.env.TICKET_LOGS_CHANNEL_ID
+          );
+
         if (ticketLogs) {
-          await ticketLogs.send(`📁 TICKET CLOSED\nTester: <@${interaction.user.id}>\nPlayer: <@${playerId}>`);
+
+          await ticketLogs.send(
+`📁 TICKET CLOSED
+
+Tester: <@${interaction.user.id}>
+Player: <@${playerId}>`
+          );
+
         }
+
       } catch {}
 
       activeTests.delete(playerId);
 
-      await interaction.editReply({ content: "✅ Ticket closed" });
+      await interaction.editReply({
+        content: "✅ Ticket closed"
+      });
 
-      setTimeout(() => interaction.channel.delete().catch(() => {}), 1000);
+      setTimeout(() => {
+        interaction.channel.delete().catch(() => {});
+      }, 1000);
+
     }
 
   } catch (err) {
-    console.error("ERROR:", err);
+
+    console.error("❌ ERROR:", err);
+
   }
+
 });
 
 client.login(process.env.TOKEN);
