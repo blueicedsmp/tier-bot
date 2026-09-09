@@ -1,58 +1,89 @@
 require("dotenv").config();
 
-const express = require("express");
-const fs = require("fs");
-const path = require("path");
-const app = express();
-
-app.get("/", (req, res) => res.send("Bot is alive"));
-
-app.listen(process.env.PORT || 3000, () => {
-  console.log("🌐 Web server running");
-});
-
 const {
   Client,
   GatewayIntentBits,
-  REST,
-  Routes,
-  SlashCommandBuilder,
-  Events,
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  PermissionFlagsBits,
-  ChannelType
+  AttachmentBuilder,
+  PermissionsBitField,
 } = require("discord.js");
 
-// ===== ENV =====
+const express = require("express");
+const fs = require("fs");
+const path = require("path");
+
+// ============================================================
+// CONFIG
+// ============================================================
+
 const TOKEN = process.env.TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
-
 const TESTER_ROLE_ID = process.env.TESTER_ROLE_ID;
 const RESULTS_CHANNEL_ID = process.env.RESULTS_CHANNEL_ID;
 const TESTER_LOGS_CHANNEL_ID = process.env.TESTER_LOGS_CHANNEL_ID;
 const TICKET_LOGS_CHANNEL_ID = process.env.TICKET_LOGS_CHANNEL_ID;
 
-// ===== TRANSCRIPT CHANNEL =====
+// Channel where HTML transcripts are stored
 const TRANSCRIPT_CHANNEL_ID = "1547279794800955392";
 
-// ===== CLIENT =====
+// ============================================================
+// CLIENT
+// ============================================================
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
-  ]
+    GatewayIntentBits.GuildMembers,
+  ],
 });
 
-// ===== DATA =====
+// ============================================================
+// EXPRESS SERVER
+// ============================================================
+
+const app = express();
+
+app.get("/", (req, res) => {
+  res.send("Bot is alive");
+});
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`🌐 Web server running on port ${PORT}`);
+});
+
+// ============================================================
+// DATA
+// ============================================================
+
+// Players waiting to be tested
 const queue = [];
+
+// playerId => test data
+//
+// Example:
+// {
+//   player: "123",
+//   tester: "456",
+//   claimedAt: Date,
+//   closed: false,
+//   finished: false
+// }
 const activeTests = new Map();
 
-// ===== EMBED HELPER =====
+// Message used for the queue panel
+let queuePanelMessage = null;
+
+// ============================================================
+// EMBEDS
+// ============================================================
+
 function createEmbed(title, description, color = 0x5865f2) {
   return new EmbedBuilder()
     .setTitle(title)
@@ -61,7 +92,80 @@ function createEmbed(title, description, color = 0x5865f2) {
     .setTimestamp();
 }
 
-// ===== HTML ESCAPE =====
+// ============================================================
+// QUEUE PANEL
+// ============================================================
+
+function createPanelEmbed() {
+  const count = queue.length;
+
+  return new EmbedBuilder()
+    .setTitle("🧪 Testing Queue")
+    .setDescription(
+      "Join the queue to be tested by one of our testers.\n\n" +
+        "Click **Join Queue** to enter the queue or **Leave Queue** to remove yourself."
+    )
+    .addFields({
+      name: "👥 Players in Queue",
+      value: `**${count}**`,
+      inline: true,
+    })
+    .setColor(0x5865f2)
+    .setTimestamp();
+}
+
+function createPanelButtons() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("join_queue")
+      .setLabel("Join Queue")
+      .setEmoji("➕")
+      .setStyle(ButtonStyle.Success),
+
+    new ButtonBuilder()
+      .setCustomId("leave_queue")
+      .setLabel("Leave Queue")
+      .setEmoji("➖")
+      .setStyle(ButtonStyle.Danger)
+  );
+}
+
+async function updateQueuePanel() {
+  if (!queuePanelMessage) return;
+
+  try {
+    await queuePanelMessage.edit({
+      embeds: [createPanelEmbed()],
+      components: [createPanelButtons()],
+    });
+  } catch (error) {
+    console.error("❌ Failed to update queue panel:", error);
+  }
+}
+
+// ============================================================
+// TESTER CHECK
+// ============================================================
+
+function isTester(interaction) {
+  return interaction.member?.roles?.cache?.has(TESTER_ROLE_ID);
+}
+
+// ============================================================
+// ACTIVE TEST CHECK
+// ============================================================
+
+function getActiveTestForTester(testerId) {
+  return [...activeTests.entries()].find(
+    ([playerId, data]) =>
+      data.tester === testerId && data.closed === false
+  );
+}
+
+// ============================================================
+// HTML ESCAPING
+// ============================================================
+
 function escapeHTML(text) {
   if (!text) return "";
 
@@ -73,15 +177,19 @@ function escapeHTML(text) {
     .replace(/'/g, "&#039;");
 }
 
-// ===== CREATE HTML TRANSCRIPT =====
+// ============================================================
+// CREATE HTML TRANSCRIPT
+// ============================================================
+
 async function createTranscript(channel, playerId, testerId) {
+  console.log(`📄 Creating transcript for ${channel.name}`);
+
   let messages = [];
   let lastId;
 
-  // Get all messages
   while (true) {
     const options = {
-      limit: 100
+      limit: 100,
     };
 
     if (lastId) {
@@ -99,50 +207,38 @@ async function createTranscript(channel, playerId, testerId) {
     if (batch.size < 100) break;
   }
 
+  // Oldest first
   messages.reverse();
 
   const player = await client.users.fetch(playerId).catch(() => null);
   const tester = await client.users.fetch(testerId).catch(() => null);
 
-  const playerName = player
-    ? `${player.username}#${player.discriminator}`
-    : playerId;
-
-  const testerName = tester
-    ? `${tester.username}#${tester.discriminator}`
-    : testerId;
+  const generatedAt = new Date().toLocaleString("en-GB");
 
   let messageHTML = "";
 
   for (const message of messages) {
     const username = escapeHTML(message.author.username);
-    const avatar = message.author.displayAvatarURL({
-      extension: "png",
-      size: 128
-    });
-
-    const timestamp = new Date(message.createdTimestamp).toLocaleString(
-      "en-GB",
-      {
-        dateStyle: "short",
-        timeStyle: "medium"
-      }
+    const displayName = escapeHTML(
+      message.member?.displayName || message.author.username
     );
 
-    let content = escapeHTML(message.content);
+    const timestamp = new Date(message.createdTimestamp).toLocaleString(
+      "en-GB"
+    );
 
-    if (!content) {
-      content = "<em>No message content</em>";
-    }
+    let content = escapeHTML(message.content || "");
 
     // Attachments
     if (message.attachments.size > 0) {
       for (const attachment of message.attachments.values()) {
         content += `
           <div class="attachment">
-            📎 <a href="${attachment.url}" target="_blank">
-              ${escapeHTML(attachment.name || "Attachment")}
-            </a>
+            📎 <a href="${escapeHTML(
+              attachment.url
+            )}" target="_blank">${escapeHTML(
+          attachment.name || "Attachment"
+        )}</a>
           </div>
         `;
       }
@@ -150,26 +246,44 @@ async function createTranscript(channel, playerId, testerId) {
 
     // Embeds
     if (message.embeds.length > 0) {
-      content += `
-        <div class="bot-embed">
-          <strong>Embed</strong>
-          <br>
-          ${message.embeds
-            .map(embed => escapeHTML(embed.description || embed.title || "Embed"))
-            .join("<br>")}
-        </div>
-      `;
+      for (const embed of message.embeds) {
+        if (embed.title) {
+          content += `<div class="discord-embed"><strong>${escapeHTML(
+            embed.title
+          )}</strong></div>`;
+        }
+
+        if (embed.description) {
+          content += `<div class="discord-embed">${escapeHTML(
+            embed.description
+          )}</div>`;
+        }
+      }
     }
 
     messageHTML += `
       <div class="message">
-        <img class="avatar" src="${avatar}">
+        <div class="avatar">
+          ${
+            message.author.displayAvatarURL
+              ? `<img src="${message.author.displayAvatarURL({
+                  extension: "png",
+                  size: 64,
+                })}" />`
+              : ""
+          }
+        </div>
+
         <div class="message-content">
-          <div>
-            <span class="username">${username}</span>
+          <div class="message-header">
+            <span class="username">${displayName}</span>
+            <span class="tag">@${username}</span>
             <span class="timestamp">${timestamp}</span>
           </div>
-          <div class="content">${content}</div>
+
+          <div class="content">
+            ${content || "<em>No message content</em>"}
+          </div>
         </div>
       </div>
     `;
@@ -180,93 +294,126 @@ async function createTranscript(channel, playerId, testerId) {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
 <title>Ticket Transcript - ${escapeHTML(channel.name)}</title>
 
 <style>
 
+* {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
-  padding: 0;
   background: #313338;
   color: #dbdee1;
   font-family: Arial, Helvetica, sans-serif;
 }
 
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 30px;
+}
+
 .header {
-  background: #1e1f22;
+  background: #2b2d31;
   padding: 25px;
-  border-bottom: 1px solid #111214;
+  border-radius: 8px;
+  margin-bottom: 20px;
 }
 
 .header h1 {
-  margin: 0 0 10px 0;
+  margin: 0 0 15px 0;
   color: white;
 }
 
 .info {
-  color: #949ba4;
-  line-height: 1.6;
+  color: #b5bac1;
+  line-height: 1.7;
 }
 
-.messages {
-  padding: 25px;
+.info strong {
+  color: #ffffff;
 }
 
 .message {
   display: flex;
   gap: 15px;
-  margin-bottom: 22px;
+  padding: 10px 15px;
+  border-radius: 5px;
 }
 
-.avatar {
+.message:hover {
+  background: #2e3035;
+}
+
+.avatar img {
   width: 40px;
   height: 40px;
   border-radius: 50%;
 }
 
 .message-content {
-  max-width: 90%;
+  flex: 1;
+}
+
+.message-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .username {
   color: white;
   font-weight: bold;
-  margin-right: 8px;
 }
 
-.timestamp {
+.tag {
   color: #949ba4;
   font-size: 12px;
 }
 
+.timestamp {
+  color: #949ba4;
+  font-size: 11px;
+}
+
 .content {
-  margin-top: 5px;
+  margin-top: 3px;
   white-space: pre-wrap;
-  word-wrap: break-word;
-  line-height: 1.5;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
 }
 
 .attachment {
   margin-top: 8px;
+  padding: 8px;
   background: #2b2d31;
-  padding: 10px;
-  border-radius: 5px;
-}
-
-.attachment a {
-  color: #00a8fc;
-}
-
-.bot-embed {
-  margin-top: 8px;
-  padding: 10px;
-  background: #2b2d31;
-  border-left: 4px solid #5865f2;
   border-radius: 4px;
 }
 
-a {
-  color: #00a8fc;
+.attachment a {
+  color: #00aff4;
+  text-decoration: none;
+}
+
+.discord-embed {
+  margin-top: 8px;
+  padding: 10px;
+  border-left: 4px solid #5865f2;
+  background: #2b2d31;
+  border-radius: 4px;
+}
+
+.footer {
+  margin-top: 30px;
+  text-align: center;
+  color: #949ba4;
+  font-size: 12px;
 }
 
 </style>
@@ -274,24 +421,31 @@ a {
 
 <body>
 
-<div class="header">
+<div class="container">
 
-<h1>📋 Ticket Transcript</h1>
+  <div class="header">
 
-<div class="info">
-<strong>Ticket:</strong> ${escapeHTML(channel.name)}<br>
-<strong>Player:</strong> ${escapeHTML(playerName)}<br>
-<strong>Tester:</strong> ${escapeHTML(testerName)}<br>
-<strong>Guild:</strong> ${escapeHTML(channel.guild.name)}<br>
-<strong>Created:</strong> ${new Date(channel.createdTimestamp).toLocaleString("en-GB")}<br>
-<strong>Messages:</strong> ${messages.length}
-</div>
+    <h1>🧪 Ticket Transcript</h1>
 
-</div>
+    <div class="info">
+      <strong>Ticket:</strong> ${escapeHTML(channel.name)}<br>
+      <strong>Player:</strong> ${
+        escapeHTML(player?.username || playerId)
+      }<br>
+      <strong>Tester:</strong> ${
+        escapeHTML(tester?.username || testerId)
+      }<br>
+      <strong>Messages:</strong> ${messages.length}<br>
+      <strong>Generated:</strong> ${generatedAt}
+    </div>
 
-<div class="messages">
+  </div>
 
-${messageHTML}
+  ${messageHTML}
+
+  <div class="footer">
+    Transcript generated by the testing bot.
+  </div>
 
 </div>
 
@@ -302,221 +456,125 @@ ${messageHTML}
   const transcriptDirectory = path.join(__dirname, "transcripts");
 
   if (!fs.existsSync(transcriptDirectory)) {
-    fs.mkdirSync(transcriptDirectory);
+    fs.mkdirSync(transcriptDirectory, {
+      recursive: true,
+    });
   }
 
-  const fileName =
-    `transcript-${channel.name}-${Date.now()}.html`;
+  const safeName = channel.name.replace(/[^a-zA-Z0-9-_]/g, "_");
 
-  const filePath =
-    path.join(transcriptDirectory, fileName);
+  const fileName = `${safeName}-${Date.now()}.html`;
 
-  fs.writeFileSync(filePath, html);
+  const filePath = path.join(transcriptDirectory, fileName);
+
+  fs.writeFileSync(filePath, html, "utf8");
+
+  console.log(`✅ Transcript created: ${filePath}`);
 
   return {
     filePath,
     fileName,
-    messageCount: messages.length
   };
 }
 
-// ===== SEND TRANSCRIPT =====
+// ============================================================
+// SEND TRANSCRIPT
+// ============================================================
+
 async function sendTranscript(channel, playerId, testerId) {
-  try {
-    const transcript = await createTranscript(
-      channel,
-      playerId,
-      testerId
-    );
-
-    const transcriptChannel =
-      channel.guild.channels.cache.get(
-        TRANSCRIPT_CHANNEL_ID
-      );
-
-    if (!transcriptChannel) {
-      console.error(
-        "❌ Transcript channel not found."
-      );
-
-      return {
-        success: false,
-        transcript
-      };
-    }
-
-    // ===== TRANSCRIPT EMBED =====
-    const transcriptEmbed = new EmbedBuilder()
-      .setTitle("📋 Ticket Transcript")
-      .setColor(0x5865f2)
-      .addFields(
-        {
-          name: "Ticket",
-          value: channel.name,
-          inline: true
-        },
-        {
-          name: "Player",
-          value: `<@${playerId}>`,
-          inline: true
-        },
-        {
-          name: "Tester",
-          value: `<@${testerId}>`,
-          inline: true
-        },
-        {
-          name: "Messages",
-          value: `${transcript.messageCount}`,
-          inline: true
-        }
-      )
-      .setTimestamp();
-
-    // Save in transcript channel
-    await transcriptChannel.send({
-      embeds: [transcriptEmbed],
-      files: [
-        {
-          attachment: transcript.filePath,
-          name: transcript.fileName
-        }
-      ]
-    });
-
-    // Send to player
-    const player =
-      await client.users.fetch(playerId).catch(() => null);
-
-    let dmSent = false;
-
-    if (player) {
-      try {
-        await player.send({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("📋 Your Ticket Transcript")
-              .setDescription(
-                `Your transcript from **${channel.name}** is attached below.`
-              )
-              .setColor(0x5865f2)
-              .setTimestamp()
-          ],
-          files: [
-            {
-              attachment: transcript.filePath,
-              name: transcript.fileName
-            }
-          ]
-        });
-
-        dmSent = true;
-
-      } catch (err) {
-        console.log(
-          `⚠️ Could not DM transcript to ${playerId}`
-        );
-      }
-    }
-
-    return {
-      success: true,
-      dmSent,
-      transcript
-    };
-
-  } catch (err) {
-    console.error(
-      "❌ Transcript error:",
-      err
-    );
-
-    return {
-      success: false
-    };
-  }
-}
-
-// ===== COMMANDS =====
-const commands = [
-  new SlashCommandBuilder()
-    .setName("panel")
-    .setDescription("Create queue panel"),
-
-  new SlashCommandBuilder()
-    .setName("claim")
-    .setDescription("Claim next player"),
-
-  new SlashCommandBuilder()
-    .setName("finish")
-    .setDescription("Finish current test")
-    .addStringOption(option =>
-      option
-        .setName("rank")
-        .setDescription("Rank earned")
-        .setRequired(true)
-    )
-].map(cmd => cmd.toJSON());
-
-// ===== READY =====
-client.once(Events.ClientReady, async () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-
-  try {
-    const rest =
-      new REST({ version: "10" }).setToken(TOKEN);
-
-    await rest.put(
-      Routes.applicationGuildCommands(
-        client.user.id,
-        GUILD_ID
-      ),
-      { body: commands }
-    );
-
-    console.log("📦 Commands registered");
-
-  } catch (err) {
-    console.error(
-      "❌ Command registration failed:",
-      err
-    );
-  }
-});
-
-// ===== PANEL =====
-function createPanelEmbed() {
-  return new EmbedBuilder()
-    .setTitle("🎮 Testing Queue")
-    .setDescription(
-      "Join the queue to get tested."
-    )
-    .setColor(0x00ff99)
-    .addFields({
-      name: "Players in Queue",
-      value: `${queue.length}`,
-      inline: true
-    });
-}
-
-function createPanelButtons() {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("join_queue")
-      .setLabel("Join Queue")
-      .setStyle(ButtonStyle.Success),
-
-    new ButtonBuilder()
-      .setCustomId("leave_queue")
-      .setLabel("Leave Queue")
-      .setStyle(ButtonStyle.Danger)
+  const { filePath, fileName } = await createTranscript(
+    channel,
+    playerId,
+    testerId
   );
+
+  let savedToChannel = false;
+  let sentToPlayer = false;
+
+  // ----------------------------------------------------------
+  // Save transcript to transcript channel
+  // ----------------------------------------------------------
+
+  try {
+    const transcriptChannel = await client.channels.fetch(
+      TRANSCRIPT_CHANNEL_ID
+    );
+
+    if (transcriptChannel) {
+      const attachment = new AttachmentBuilder(filePath).setName(
+        fileName
+      );
+
+      await transcriptChannel.send({
+        embeds: [
+          createEmbed(
+            "📄 Ticket Transcript",
+            `Transcript saved for **${channel.name}**.\n\n` +
+              `👤 Player: <@${playerId}>\n` +
+              `🧪 Tester: <@${testerId}>`,
+            0x5865f2
+          ),
+        ],
+        files: [attachment],
+      });
+
+      savedToChannel = true;
+    }
+  } catch (error) {
+    console.error("❌ Failed to save transcript:", error);
+  }
+
+  // ----------------------------------------------------------
+  // DM transcript to player
+  // ----------------------------------------------------------
+
+  try {
+    const player = await client.users.fetch(playerId);
+
+    const attachment = new AttachmentBuilder(filePath).setName(
+      fileName
+    );
+
+    await player.send({
+      embeds: [
+        createEmbed(
+          "📄 Test Transcript",
+          `Your test ticket transcript has been generated.\n\n` +
+            `🧪 Tester: <@${testerId}>\n` +
+            `🎫 Ticket: **${channel.name}**`,
+          0x5865f2
+        ),
+      ],
+      files: [attachment],
+    });
+
+    sentToPlayer = true;
+  } catch (error) {
+    console.error("❌ Failed to DM transcript to player:", error);
+  }
+
+  // ----------------------------------------------------------
+  // Delete temporary file
+  // ----------------------------------------------------------
+
+  try {
+    fs.unlinkSync(filePath);
+  } catch (error) {
+    console.error("⚠️ Failed to delete temporary transcript:", error);
+  }
+
+  return {
+    savedToChannel,
+    sentToPlayer,
+  };
 }
 
-// ===== CLOSED TICKET BUTTONS =====
+// ============================================================
+// CLOSED TICKET BUTTONS
+// ============================================================
+
 function createClosedTicketButtons() {
   return new ActionRowBuilder().addComponents(
-
     new ButtonBuilder()
       .setCustomId("open_ticket")
       .setLabel("Open Ticket")
@@ -534,952 +592,898 @@ function createClosedTicketButtons() {
       .setLabel("Delete Ticket")
       .setEmoji("🗑️")
       .setStyle(ButtonStyle.Danger)
-
   );
 }
 
-// ===== INTERACTIONS =====
-client.on(
-  Events.InteractionCreate,
-  async interaction => {
+// ============================================================
+// BOT READY
+// ============================================================
 
-    try {
+client.once("ready", async () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+  console.log(`👥 Queue currently contains ${queue.length} players`);
+});
 
-      // ===== /panel =====
-      if (
-        interaction.isChatInputCommand() &&
-        interaction.commandName === "panel"
-      ) {
+// ============================================================
+// SLASH COMMANDS
+// ============================================================
 
-        return interaction.reply({
-          embeds: [
-            createPanelEmbed()
-          ],
-          components: [
-            createPanelButtons()
-          ]
-        });
-      }
+client.on("interactionCreate", async (interaction) => {
+  try {
+    // ========================================================
+    // SLASH COMMANDS
+    // ========================================================
 
-      // ===== JOIN QUEUE =====
-      if (
-        interaction.isButton() &&
-        interaction.customId === "join_queue"
-      ) {
+    if (interaction.isChatInputCommand()) {
+      // ------------------------------------------------------
+      // /panel
+      // ------------------------------------------------------
 
-        await interaction.deferReply({
-          ephemeral: true
-        });
-
-        if (
-          queue.some(
-            user =>
-              user.id === interaction.user.id
-          )
-        ) {
-
-          return interaction.editReply({
+      if (interaction.commandName === "panel") {
+        if (!isTester(interaction)) {
+          return interaction.reply({
             embeds: [
               createEmbed(
-                "❌ Already in Queue",
-                "You are already in the testing queue.",
+                "❌ No Permission",
+                "You need the tester role to use this command.",
                 0xff0000
-              )
-            ]
+              ),
+            ],
+            ephemeral: true,
           });
         }
 
-        queue.push({
-          id: interaction.user.id
+        const message = await interaction.reply({
+          embeds: [createPanelEmbed()],
+          components: [createPanelButtons()],
+          fetchReply: true,
         });
 
-        return interaction.editReply({
+        queuePanelMessage = message;
+
+        return;
+      }
+
+      // ------------------------------------------------------
+      // /claim
+      // ------------------------------------------------------
+
+      if (interaction.commandName === "claim") {
+        if (!isTester(interaction)) {
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ No Permission",
+                "You need the tester role to use this command.",
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
+
+        // Check if tester is already testing someone
+        const existingTest = getActiveTestForTester(
+          interaction.user.id
+        );
+
+        if (existingTest) {
+          const [existingPlayerId, existingData] = existingTest;
+
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ Already Testing",
+                `You are already testing <@${existingPlayerId}>.\n\n` +
+                  `You must **finish and close your current ticket** before claiming another player.`,
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
+
+        // Check queue
+        if (queue.length === 0) {
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ Queue Empty",
+                "There are currently no players waiting in the queue.",
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
+
+        // Get next player
+        const playerId = queue.shift();
+
+        // Update panel
+        await updateQueuePanel();
+
+        // Get guild
+        const guild = await client.guilds.fetch(GUILD_ID);
+
+        // Create ticket
+        const ticketChannel = await guild.channels.create({
+          name: `test-${playerId}`,
+          type: 0,
+
+          permissionOverwrites: [
+            {
+              id: guild.roles.everyone.id,
+              deny: [
+                PermissionsBitField.Flags.ViewChannel,
+              ],
+            },
+
+            {
+              id: playerId,
+              allow: [
+                PermissionsBitField.Flags.ViewChannel,
+                PermissionsBitField.Flags.SendMessages,
+                PermissionsBitField.Flags.ReadMessageHistory,
+              ],
+            },
+
+            {
+              id: interaction.user.id,
+              allow: [
+                PermissionsBitField.Flags.ViewChannel,
+                PermissionsBitField.Flags.SendMessages,
+                PermissionsBitField.Flags.ReadMessageHistory,
+              ],
+            },
+
+            {
+              id: client.user.id,
+              allow: [
+                PermissionsBitField.Flags.ViewChannel,
+                PermissionsBitField.Flags.SendMessages,
+                PermissionsBitField.Flags.ReadMessageHistory,
+                PermissionsBitField.Flags.ManageChannels,
+              ],
+            },
+          ],
+        });
+
+        // Store active test
+        activeTests.set(playerId, {
+          player: playerId,
+          tester: interaction.user.id,
+          claimedAt: new Date(),
+          closed: false,
+          finished: false,
+        });
+
+        // Ticket message
+        const ticketEmbed = createEmbed(
+          "🧪 Test Ticket",
+          `Welcome <@${playerId}>!\n\n` +
+            `Your tester is <@${interaction.user.id}>.\n\n` +
+            `Your test can now begin. Good luck!`,
+          0x5865f2
+        );
+
+        const buttons = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("close_ticket")
+            .setLabel("Close Ticket")
+            .setEmoji("🔒")
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        await ticketChannel.send({
+          embeds: [ticketEmbed],
+          components: [buttons],
+        });
+
+        // Tester response
+        await interaction.reply({
+          embeds: [
+            createEmbed(
+              "✅ Test Claimed",
+              `You are now testing <@${playerId}>.\n\n` +
+                `🎫 Ticket: ${ticketChannel}\n\n` +
+                `You cannot claim another player until this ticket is closed.`,
+              0x00ff00
+            ),
+          ],
+          ephemeral: true,
+        });
+
+        return;
+      }
+
+      // ------------------------------------------------------
+      // /finish
+      // ------------------------------------------------------
+
+      if (interaction.commandName === "finish") {
+        if (!isTester(interaction)) {
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ No Permission",
+                "You need the tester role to use this command.",
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
+
+        // Find only OPEN test
+        const activeTest = [...activeTests.entries()].find(
+          ([playerId, data]) =>
+            data.tester === interaction.user.id &&
+            data.closed === false
+        );
+
+        if (!activeTest) {
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ No Active Test",
+                "You are not currently testing a player.",
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
+
+        const [playerId, testData] = activeTest;
+
+        const rank = interaction.options.getString("rank");
+
+        // Mark test as finished, but DO NOT remove it.
+        // The ticket remains active until it is closed.
+        activeTests.set(playerId, {
+          ...testData,
+          finished: true,
+          finishedAt: new Date(),
+          rank,
+        });
+
+        // Results channel
+        try {
+          const resultsChannel = await client.channels.fetch(
+            RESULTS_CHANNEL_ID
+          );
+
+          await resultsChannel.send({
+            embeds: [
+              createEmbed(
+                "🏆 Test Result",
+                `👤 **Player:** <@${playerId}>\n` +
+                  `🧪 **Tester:** <@${interaction.user.id}>\n` +
+                  `📊 **Rank:** ${rank}`,
+                0x00ff00
+              ),
+            ],
+          });
+        } catch (error) {
+          console.error(
+            "❌ Failed to send result:",
+            error
+          );
+        }
+
+        // Tester logs
+        try {
+          const logsChannel = await client.channels.fetch(
+            TESTER_LOGS_CHANNEL_ID
+          );
+
+          await logsChannel.send({
+            embeds: [
+              createEmbed(
+                "🧪 Test Completed",
+                `Tester <@${interaction.user.id}> completed a test.\n\n` +
+                  `👤 Player: <@${playerId}>\n` +
+                  `📊 Rank: ${rank}`,
+                0x00ff00
+              ),
+            ],
+          });
+        } catch (error) {
+          console.error(
+            "❌ Failed to send tester log:",
+            error
+          );
+        }
+
+        // Ticket channel
+        try {
+          const ticketChannel = await client.channels.fetch(
+            interaction.channelId
+          );
+
+          await ticketChannel.send({
+            embeds: [
+              createEmbed(
+                "🏆 Test Completed",
+                `The test has been completed.\n\n` +
+                  `📊 **Rank:** ${rank}\n\n` +
+                  `The tester can now review the ticket and close it when ready.`,
+                0x00ff00
+              ),
+            ],
+          });
+        } catch (error) {
+          console.error(
+            "❌ Failed to send ticket result:",
+            error
+          );
+        }
+
+        return interaction.reply({
+          embeds: [
+            createEmbed(
+              "✅ Test Finished",
+              `The test for <@${playerId}> has been marked as finished.\n\n` +
+                `📊 **Rank:** ${rank}\n\n` +
+                `You are still assigned to this ticket until you close it.`,
+              0x00ff00
+            ),
+          ],
+          ephemeral: true,
+        });
+      }
+    }
+
+    // ========================================================
+    // BUTTONS
+    // ========================================================
+
+    if (interaction.isButton()) {
+      // ------------------------------------------------------
+      // JOIN QUEUE
+      // ------------------------------------------------------
+
+      if (interaction.customId === "join_queue") {
+        // Already in queue
+        if (queue.includes(interaction.user.id)) {
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ Already in Queue",
+                "You are already waiting in the testing queue.",
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
+
+        // Already being tested
+        if (activeTests.has(interaction.user.id)) {
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ Already Have a Test",
+                "You already have a testing ticket and cannot join the queue.",
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
+
+        queue.push(interaction.user.id);
+
+        const position = queue.indexOf(interaction.user.id) + 1;
+
+        await updateQueuePanel();
+
+        return interaction.reply({
           embeds: [
             createEmbed(
               "✅ Joined Queue",
-              `You have joined the testing queue.\n\n**Position:** #${queue.length}`,
+              `You have been added to the testing queue.\n\n` +
+                `📍 **Position:** ${position}\n` +
+                `👥 **Players waiting:** ${queue.length}`,
               0x00ff00
-            )
-          ]
+            ),
+          ],
+          ephemeral: true,
         });
       }
 
-      // ===== LEAVE QUEUE =====
-      if (
-        interaction.isButton() &&
-        interaction.customId === "leave_queue"
-      ) {
+      // ------------------------------------------------------
+      // LEAVE QUEUE
+      // ------------------------------------------------------
 
-        await interaction.deferReply({
-          ephemeral: true
-        });
-
-        const index =
-          queue.findIndex(
-            user =>
-              user.id === interaction.user.id
-          );
+      if (interaction.customId === "leave_queue") {
+        const index = queue.indexOf(interaction.user.id);
 
         if (index === -1) {
-
-          return interaction.editReply({
+          return interaction.reply({
             embeds: [
               createEmbed(
                 "❌ Not in Queue",
                 "You are not currently in the testing queue.",
                 0xff0000
-              )
-            ]
+              ),
+            ],
+            ephemeral: true,
           });
         }
 
         queue.splice(index, 1);
 
-        return interaction.editReply({
+        await updateQueuePanel();
+
+        return interaction.reply({
           embeds: [
             createEmbed(
               "✅ Left Queue",
-              "You have left the testing queue.",
+              "You have been removed from the testing queue.",
               0x00ff00
-            )
-          ]
-        });
-      }
-
-      // ===== /claim =====
-      if (
-        interaction.isChatInputCommand() &&
-        interaction.commandName === "claim"
-      ) {
-
-        if (
-          !interaction.member.roles.cache.has(
-            TESTER_ROLE_ID
-          )
-        ) {
-
-          return interaction.reply({
-            embeds: [
-              createEmbed(
-                "❌ Testers Only",
-                "You need the tester role to use this command.",
-                0xff0000
-              )
-            ],
-            ephemeral: true
-          });
-        }
-
-        const nextPlayer =
-          queue.shift();
-
-        if (!nextPlayer) {
-
-          return interaction.reply({
-            embeds: [
-              createEmbed(
-                "❌ Queue Empty",
-                "There are currently no players waiting to be tested.",
-                0xff0000
-              )
-            ],
-            ephemeral: true
-          });
-        }
-
-        const channel =
-          await interaction.guild.channels.create({
-
-            name: `test-${nextPlayer.id}`,
-
-            type: ChannelType.GuildText,
-
-            permissionOverwrites: [
-
-              {
-                id:
-                  interaction.guild.roles.everyone.id,
-
-                deny: [
-                  PermissionFlagsBits.ViewChannel
-                ]
-              },
-
-              {
-                id: nextPlayer.id,
-
-                allow: [
-                  PermissionFlagsBits.ViewChannel,
-                  PermissionFlagsBits.SendMessages
-                ]
-              },
-
-              {
-                id: interaction.user.id,
-
-                allow: [
-                  PermissionFlagsBits.ViewChannel,
-                  PermissionFlagsBits.SendMessages
-                ]
-              },
-
-              {
-                id: TESTER_ROLE_ID,
-
-                allow: [
-                  PermissionFlagsBits.ViewChannel
-                ]
-              }
-
-            ]
-          });
-
-        activeTests.set(
-          nextPlayer.id,
-          {
-            tester:
-              interaction.user.id,
-
-            closed: false
-          }
-        );
-
-        const buttons =
-          new ActionRowBuilder()
-            .addComponents(
-
-              new ButtonBuilder()
-                .setCustomId("stop_test")
-                .setLabel("Stop Test")
-                .setStyle(ButtonStyle.Danger),
-
-              new ButtonBuilder()
-                .setCustomId("close_ticket")
-                .setLabel("Close Ticket")
-                .setStyle(ButtonStyle.Secondary)
-
-            );
-
-        await channel.send({
-
-          embeds: [
-            createEmbed(
-              "🧪 Test Started",
-              `<@${nextPlayer.id}> is being tested by <@${interaction.user.id}>.`,
-              0x5865f2
-            )
+            ),
           ],
-
-          components: [
-            buttons
-          ]
-
-        });
-
-        return interaction.reply({
-
-          embeds: [
-            createEmbed(
-              "✅ Test Created",
-              `Created ${channel}`,
-              0x00ff00
-            )
-          ],
-
-          ephemeral: true
-
+          ephemeral: true,
         });
       }
 
-      // ===== /finish =====
-      if (
-        interaction.isChatInputCommand() &&
-        interaction.commandName === "finish"
-      ) {
-
-        await interaction.deferReply({
-          ephemeral: true
-        });
-
-        const testEntry =
-          [...activeTests.entries()]
-            .find(
-              ([_, data]) =>
-                data.tester ===
-                interaction.user.id
-            );
-
-        if (!testEntry) {
-
-          return interaction.editReply({
-            embeds: [
-              createEmbed(
-                "❌ No Active Test",
-                "You are not currently testing anyone.",
-                0xff0000
-              )
-            ]
-          });
-        }
-
-        const [playerId] =
-          testEntry;
-
-        const rank =
-          interaction.options.getString(
-            "rank"
-          );
-
-        const resultsChannel =
-          interaction.guild.channels.cache.get(
-            RESULTS_CHANNEL_ID
-          );
-
-        if (resultsChannel) {
-
-          await resultsChannel.send({
-
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("🏆 Test Result")
-                .setColor(0x00ff00)
-                .addFields(
-
-                  {
-                    name: "Player",
-                    value:
-                      `<@${playerId}>`,
-                    inline: true
-                  },
-
-                  {
-                    name: "Tester",
-                    value:
-                      `<@${interaction.user.id}>`,
-                    inline: true
-                  },
-
-                  {
-                    name: "Rank Earned",
-                    value: rank,
-                    inline: false
-                  }
-
-                )
-                .setTimestamp()
-            ]
-
-          });
-        }
-
-        const testerLogs =
-          interaction.guild.channels.cache.get(
-            TESTER_LOGS_CHANNEL_ID
-          );
-
-        if (testerLogs) {
-
-          await testerLogs.send({
-
-            embeds: [
-              new EmbedBuilder()
-                .setTitle(
-                  "🟢 Successful Test"
-                )
-                .setColor(0x00ff00)
-                .addFields(
-
-                  {
-                    name: "Player",
-                    value:
-                      `<@${playerId}>`,
-                    inline: true
-                  },
-
-                  {
-                    name: "Tester",
-                    value:
-                      `<@${interaction.user.id}>`,
-                    inline: true
-                  },
-
-                  {
-                    name: "Rank Earned",
-                    value: rank,
-                    inline: false
-                  }
-
-                )
-                .setTimestamp()
-            ]
-
-          });
-        }
-
-        activeTests.delete(
-          playerId
-        );
-
-        await interaction.editReply({
-
-          embeds: [
-            createEmbed(
-              "✅ Test Finished",
-              "The test has been successfully completed.",
-              0x00ff00
-            )
-          ]
-
-        });
-
-        // NOTE:
-        // The channel is NOT deleted here anymore.
-        // Staff can close/delete it manually.
-
-        await interaction.channel.send({
-
-          embeds: [
-            createEmbed(
-              "🏆 Test Completed",
-              `<@${playerId}> has received **${rank}**.`,
-              0x00ff00
-            )
-          ]
-
-        });
-      }
-
-      // ===== STOP TEST =====
-      if (
-        interaction.isButton() &&
-        interaction.customId === "stop_test"
-      ) {
-
-        await interaction.deferReply({
-          ephemeral: true
-        });
-
-        const testEntry =
-          [...activeTests.entries()]
-            .find(
-              ([_, data]) =>
-                data.tester ===
-                interaction.user.id
-            );
-
-        if (!testEntry) {
-
-          return interaction.editReply({
-            embeds: [
-              createEmbed(
-                "❌ Permission Denied",
-                "Only the tester can stop this test.",
-                0xff0000
-              )
-            ]
-          });
-        }
-
-        const [playerId] =
-          testEntry;
-
-        const testerLogs =
-          interaction.guild.channels.cache.get(
-            TESTER_LOGS_CHANNEL_ID
-          );
-
-        if (testerLogs) {
-
-          await testerLogs.send({
-
-            embeds: [
-              new EmbedBuilder()
-                .setTitle(
-                  "🛑 Test Cancelled"
-                )
-                .setColor(0xff0000)
-                .addFields(
-
-                  {
-                    name: "Tester",
-                    value:
-                      `<@${interaction.user.id}>`,
-                    inline: true
-                  },
-
-                  {
-                    name: "Player",
-                    value:
-                      `<@${playerId}>`,
-                    inline: true
-                  }
-
-                )
-                .setTimestamp()
-            ]
-
-          });
-        }
-
-        activeTests.delete(
-          playerId
-        );
-
-        await interaction.editReply({
-
-          embeds: [
-            createEmbed(
-              "🛑 Test Cancelled",
-              "The test has been cancelled.",
-              0xff0000
-            )
-          ]
-
-        });
-
-        setTimeout(() => {
-
-          interaction.channel.delete()
-            .catch(() => {});
-
-        }, 2000);
-
-      }
-
-      // =====================================================
+      // ------------------------------------------------------
       // CLOSE TICKET
-      // =====================================================
+      // ------------------------------------------------------
 
-      if (
-        interaction.isButton() &&
-        interaction.customId === "close_ticket"
-      ) {
+      if (interaction.customId === "close_ticket") {
+        const playerId = interaction.channel.name.replace(
+          "test-",
+          ""
+        );
+
+        const testData = activeTests.get(playerId);
+
+        if (!testData) {
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ Test Not Found",
+                "I couldn't find the test information for this ticket.",
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
+
+        // Only assigned tester can close
+        if (testData.tester !== interaction.user.id) {
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ Not Your Ticket",
+                "Only the tester assigned to this ticket can close it.",
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
+
+        // Already closed
+        if (testData.closed) {
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ Already Closed",
+                "This ticket is already closed.",
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
 
         await interaction.deferReply({
-          ephemeral: true
+          ephemeral: true,
         });
 
-        const testEntry =
-          [...activeTests.entries()]
-            .find(
-              ([playerId, data]) =>
-                interaction.channel.name ===
-                `test-${playerId}`
-            );
-
-        if (!testEntry) {
-
-          return interaction.editReply({
-
-            embeds: [
-              createEmbed(
-                "❌ Error",
-                "This ticket could not be found.",
-                0xff0000
-              )
-            ]
-
-          });
-        }
-
-        const [playerId, testData] =
-          testEntry;
-
-        // Only tester can close
-        if (
-          testData.tester !==
-          interaction.user.id
-        ) {
-
-          return interaction.editReply({
-
-            embeds: [
-              createEmbed(
-                "❌ Permission Denied",
-                "Only the tester can close this ticket.",
-                0xff0000
-              )
-            ]
-
-          });
-        }
-
-        // Create transcript
-        const transcriptResult =
-          await sendTranscript(
-            interaction.channel,
-            playerId,
-            testData.tester
-          );
+        // Generate and send transcript
+        const transcriptResult = await sendTranscript(
+          interaction.channel,
+          playerId,
+          testData.tester
+        );
 
         // Mark closed
-        activeTests.set(
-          playerId,
-          {
-            ...testData,
-            closed: true
-          }
-        );
+        activeTests.set(playerId, {
+          ...testData,
+          closed: true,
+          closedAt: new Date(),
+        });
 
         // Lock player and tester
-        await interaction.channel.permissionOverwrites.edit(
-          playerId,
-          {
-            ViewChannel: true,
-            SendMessages: false
-          }
-        );
+        try {
+          await interaction.channel.permissionOverwrites.edit(
+            playerId,
+            {
+              SendMessages: false,
+            }
+          );
 
-        await interaction.channel.permissionOverwrites.edit(
-          testData.tester,
-          {
-            ViewChannel: true,
-            SendMessages: false
-          }
-        );
+          await interaction.channel.permissionOverwrites.edit(
+            testData.tester,
+            {
+              SendMessages: false,
+            }
+          );
+        } catch (error) {
+          console.error(
+            "❌ Failed to lock ticket:",
+            error
+          );
+        }
 
-        // Closed embed
-        const dmStatus =
-          transcriptResult.dmSent
-            ? "sent to the player"
-            : "could not be DM'd to the player";
+        let transcriptStatus = "";
 
+        if (transcriptResult.sentToPlayer) {
+          transcriptStatus += "📨 Transcript sent to the player.\n";
+        } else {
+          transcriptStatus +=
+            "⚠️ The transcript could not be DM'd to the player.\n";
+        }
+
+        if (transcriptResult.savedToChannel) {
+          transcriptStatus +=
+            "📁 Transcript saved in the transcript channel.";
+        } else {
+          transcriptStatus +=
+            "⚠️ The transcript could not be saved in the transcript channel.";
+        }
+
+        // Closed message
         await interaction.channel.send({
-
           embeds: [
-
-            new EmbedBuilder()
-              .setTitle("🔒 Ticket Closed")
-              .setDescription(
-                `This ticket has been closed.\n\n` +
-                `📄 The transcript has been **${dmStatus}**.\n` +
-                `💾 The transcript has been **saved in the transcript channel**.\n\n` +
-                `Use the buttons below to manage this ticket.`
-              )
-              .setColor(0xff9900)
-              .setTimestamp()
-
+            createEmbed(
+              "🔒 Ticket Closed",
+              `This ticket has been closed.\n\n` +
+                `${transcriptStatus}\n\n` +
+                `The ticket is now locked.\n` +
+                `Use the buttons below to manage it.`,
+              0xffa500
+            ),
           ],
-
-          components: [
-            createClosedTicketButtons()
-          ]
-
+          components: [createClosedTicketButtons()],
         });
 
         return interaction.editReply({
-
           embeds: [
             createEmbed(
               "✅ Ticket Closed",
-              "The ticket has been closed and the transcript has been saved.",
+              `The ticket for <@${playerId}> has been closed successfully.\n\n` +
+                `You can now claim another player.`,
               0x00ff00
-            )
-          ]
-
+            ),
+          ],
         });
       }
 
-      // =====================================================
+      // ------------------------------------------------------
       // OPEN TICKET
-      // =====================================================
+      // ------------------------------------------------------
 
-      if (
-        interaction.isButton() &&
-        interaction.customId === "open_ticket"
-      ) {
+      if (interaction.customId === "open_ticket") {
+        if (!isTester(interaction)) {
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ No Permission",
+                "You need the tester role to open tickets.",
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
 
-        await interaction.deferReply({
-          ephemeral: true
+        const playerId = interaction.channel.name.replace(
+          "test-",
+          ""
+        );
+
+        const testData = activeTests.get(playerId);
+
+        if (!testData) {
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ Test Not Found",
+                "I couldn't find the test information for this ticket.",
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
+
+        if (testData.tester !== interaction.user.id) {
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ Not Your Ticket",
+                "Only the assigned tester can reopen this ticket.",
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
+
+        // Make sure tester isn't already testing another player
+        const anotherActiveTest = [...activeTests.entries()].find(
+          ([otherPlayerId, data]) =>
+            otherPlayerId !== playerId &&
+            data.tester === interaction.user.id &&
+            data.closed === false
+        );
+
+        if (anotherActiveTest) {
+          const [otherPlayerId] = anotherActiveTest;
+
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ Already Testing",
+                `You are already testing <@${otherPlayerId}>.\n\n` +
+                  `You cannot reopen this ticket until your other active ticket is closed.`,
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
+
+        // Reopen
+        activeTests.set(playerId, {
+          ...testData,
+          closed: false,
         });
 
-        const testEntry =
-          [...activeTests.entries()]
-            .find(
-              ([playerId]) =>
-                interaction.channel.name ===
-                `test-${playerId}`
-            );
+        try {
+          await interaction.channel.permissionOverwrites.edit(
+            playerId,
+            {
+              ViewChannel: true,
+              SendMessages: true,
+              ReadMessageHistory: true,
+            }
+          );
 
-        if (!testEntry) {
-
-          return interaction.editReply({
-
-            embeds: [
-              createEmbed(
-                "❌ Error",
-                "This ticket could not be found.",
-                0xff0000
-              )
-            ]
-
-          });
+          await interaction.channel.permissionOverwrites.edit(
+            interaction.user.id,
+            {
+              ViewChannel: true,
+              SendMessages: true,
+              ReadMessageHistory: true,
+            }
+          );
+        } catch (error) {
+          console.error(
+            "❌ Failed to reopen ticket:",
+            error
+          );
         }
-
-        const [playerId, testData] =
-          testEntry;
-
-        // Tester only
-        if (
-          testData.tester !==
-          interaction.user.id
-        ) {
-
-          return interaction.editReply({
-
-            embeds: [
-              createEmbed(
-                "❌ Permission Denied",
-                "Only the tester can reopen this ticket.",
-                0xff0000
-              )
-            ]
-
-          });
-        }
-
-        await interaction.channel.permissionOverwrites.edit(
-          playerId,
-          {
-            ViewChannel: true,
-            SendMessages: true
-          }
-        );
-
-        await interaction.channel.permissionOverwrites.edit(
-          testData.tester,
-          {
-            ViewChannel: true,
-            SendMessages: true
-          }
-        );
-
-        activeTests.set(
-          playerId,
-          {
-            ...testData,
-            closed: false
-          }
-        );
 
         await interaction.channel.send({
-
           embeds: [
             createEmbed(
               "🔓 Ticket Reopened",
-              `<@${playerId}> and <@${testData.tester}> can now send messages again.`,
+              `This ticket has been reopened by <@${interaction.user.id}>.\n\n` +
+                `The player and tester can now send messages again.`,
               0x00ff00
-            )
-          ]
-
+            ),
+          ],
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId("close_ticket")
+                .setLabel("Close Ticket")
+                .setEmoji("🔒")
+                .setStyle(ButtonStyle.Secondary)
+            ),
+          ],
         });
 
-        return interaction.editReply({
-
+        return interaction.reply({
           embeds: [
             createEmbed(
               "✅ Ticket Reopened",
-              "The ticket has been reopened.",
+              "The ticket has been reopened. You are now assigned to this test again.",
               0x00ff00
-            )
-          ]
-
+            ),
+          ],
+          ephemeral: true,
         });
       }
 
-      // =====================================================
+      // ------------------------------------------------------
       // FORCE TRANSCRIPT
-      // =====================================================
+      // ------------------------------------------------------
 
-      if (
-        interaction.isButton() &&
-        interaction.customId === "force_transcript"
-      ) {
+      if (interaction.customId === "force_transcript") {
+        if (!isTester(interaction)) {
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ No Permission",
+                "You need the tester role to generate transcripts.",
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
+
+        const playerId = interaction.channel.name.replace(
+          "test-",
+          ""
+        );
+
+        const testData = activeTests.get(playerId);
+
+        if (!testData) {
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ Test Not Found",
+                "I couldn't find the test information for this ticket.",
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
 
         await interaction.deferReply({
-          ephemeral: true
+          ephemeral: true,
         });
 
-        const testEntry =
-          [...activeTests.entries()]
-            .find(
-              ([playerId]) =>
-                interaction.channel.name ===
-                `test-${playerId}`
-            );
+        const result = await sendTranscript(
+          interaction.channel,
+          playerId,
+          testData.tester
+        );
 
-        if (!testEntry) {
+        let status = "";
 
-          return interaction.editReply({
-
-            embeds: [
-              createEmbed(
-                "❌ Error",
-                "This ticket could not be found.",
-                0xff0000
-              )
-            ]
-
-          });
+        if (result.savedToChannel) {
+          status += "📁 Saved to transcript channel.\n";
+        } else {
+          status +=
+            "⚠️ Failed to save to transcript channel.\n";
         }
 
-        const [playerId, testData] =
-          testEntry;
-
-        if (
-          !interaction.member.roles.cache.has(
-            TESTER_ROLE_ID
-          )
-        ) {
-
-          return interaction.editReply({
-
-            embeds: [
-              createEmbed(
-                "❌ Permission Denied",
-                "Only testers can force a transcript.",
-                0xff0000
-              )
-            ]
-
-          });
-        }
-
-        const result =
-          await sendTranscript(
-            interaction.channel,
-            playerId,
-            testData.tester
-          );
-
-        if (!result.success) {
-
-          return interaction.editReply({
-
-            embeds: [
-              createEmbed(
-                "❌ Transcript Failed",
-                "The transcript could not be saved.",
-                0xff0000
-              )
-            ]
-
-          });
+        if (result.sentToPlayer) {
+          status += "📨 Sent to player.";
+        } else {
+          status +=
+            "⚠️ Failed to DM player.";
         }
 
         return interaction.editReply({
-
           embeds: [
             createEmbed(
-              "📄 Transcript Saved",
-              "A new transcript has been saved in the transcript channel.",
-              0x00ff00
-            )
-          ]
-
+              "📄 Transcript Generated",
+              status,
+              result.savedToChannel
+                ? 0x00ff00
+                : 0xffa500
+            ),
+          ],
         });
       }
 
-      // =====================================================
+      // ------------------------------------------------------
       // DELETE TICKET
-      // =====================================================
+      // ------------------------------------------------------
 
-      if (
-        interaction.isButton() &&
-        interaction.customId === "delete_ticket"
-      ) {
-
-        await interaction.deferReply({
-          ephemeral: true
-        });
-
-        if (
-          !interaction.member.roles.cache.has(
-            TESTER_ROLE_ID
-          )
-        ) {
-
-          return interaction.editReply({
-
+      if (interaction.customId === "delete_ticket") {
+        if (!isTester(interaction)) {
+          return interaction.reply({
             embeds: [
               createEmbed(
-                "❌ Permission Denied",
-                "Only testers can delete tickets.",
+                "❌ No Permission",
+                "You need the tester role to delete tickets.",
                 0xff0000
-              )
-            ]
-
+              ),
+            ],
+            ephemeral: true,
           });
         }
 
-        await interaction.editReply({
+        const playerId = interaction.channel.name.replace(
+          "test-",
+          ""
+        );
 
+        const testData = activeTests.get(playerId);
+
+        if (!testData) {
+          return interaction.reply({
+            embeds: [
+              createEmbed(
+                "❌ Test Not Found",
+                "I couldn't find the test information for this ticket.",
+                0xff0000
+              ),
+            ],
+            ephemeral: true,
+          });
+        }
+
+        await interaction.reply({
           embeds: [
             createEmbed(
               "🗑️ Deleting Ticket",
-              "The ticket will be permanently deleted.",
+              "This ticket will be deleted shortly.",
               0xff0000
-            )
-          ]
-
+            ),
+          ],
+          ephemeral: true,
         });
 
-        setTimeout(() => {
+        // Clean up stored test
+        activeTests.delete(playerId);
 
-          interaction.channel.delete()
-            .catch(() => {});
-
+        setTimeout(async () => {
+          try {
+            await interaction.channel.delete(
+              "Ticket deleted by tester"
+            );
+          } catch (error) {
+            console.error(
+              "❌ Failed to delete ticket:",
+              error
+            );
+          }
         }, 1500);
 
+        return;
       }
-
-    } catch (err) {
-
-      console.error(
-        "❌ INTERACTION ERROR:",
-        err
-      );
-
-      const errorEmbed =
-        createEmbed(
-          "❌ Something Went Wrong",
-          "An unexpected error occurred while processing your request.",
-          0xff0000
-        );
-
-      if (
-        interaction.deferred ||
-        interaction.replied
-      ) {
-
-        interaction.followUp({
-
-          embeds: [
-            errorEmbed
-          ],
-
-          ephemeral: true
-
-        }).catch(() => {});
-
-      } else {
-
-        interaction.reply({
-
-          embeds: [
-            errorEmbed
-          ],
-
-          ephemeral: true
-
-        }).catch(() => {});
-
-      }
-
     }
+  } catch (error) {
+    console.error("❌ Interaction error:", error);
 
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.followUp({
+          embeds: [
+            createEmbed(
+              "❌ Error",
+              "Something went wrong while processing that action.",
+              0xff0000
+            ),
+          ],
+          ephemeral: true,
+        });
+      } else {
+        await interaction.reply({
+          embeds: [
+            createEmbed(
+              "❌ Error",
+              "Something went wrong while processing that action.",
+              0xff0000
+            ),
+          ],
+          ephemeral: true,
+        });
+      }
+    } catch {
+      // Ignore secondary errors
+    }
   }
-);
+});
 
-// ===== LOGIN =====
+// ============================================================
+// LOGIN
+// ============================================================
+
 client.login(TOKEN);
