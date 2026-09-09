@@ -32,7 +32,6 @@ const RESULTS_CHANNEL_ID = process.env.RESULTS_CHANNEL_ID;
 const TESTER_LOGS_CHANNEL_ID = process.env.TESTER_LOGS_CHANNEL_ID;
 const TICKET_LOGS_CHANNEL_ID = process.env.TICKET_LOGS_CHANNEL_ID;
 
-// Channel where HTML transcripts are stored
 const TRANSCRIPT_CHANNEL_ID = "1547279794800955392";
 
 // ============================================================
@@ -91,37 +90,7 @@ app.listen(PORT, () => {
 // DATA
 // ============================================================
 
-// Queue entries:
-//
-// {
-//   playerId: "...",
-//   minecraftUsername: "..."
-// }
-
 const queue = [];
-
-/*
-activeTests
-
-Key = ticket channel ID
-
-{
-  channelId,
-  playerId,
-  testerId,
-  minecraftUsername,
-  playerDiscordUsername,
-  claimedAt,
-  finished,
-  rank,
-  previousRank,
-  region,
-  closed,
-  finishedAt,
-  closedAt
-}
-*/
-
 const activeTests = new Map();
 
 let queuePanelMessage = null;
@@ -130,7 +99,11 @@ let queuePanelMessage = null;
 // EMBEDS
 // ============================================================
 
-function createEmbed(title, description, color = 0x5865f2) {
+function createEmbed(
+  title,
+  description,
+  color = 0x5865f2
+) {
   return new EmbedBuilder()
     .setTitle(title)
     .setDescription(description)
@@ -143,7 +116,9 @@ function createEmbed(title, description, color = 0x5865f2) {
 // ============================================================
 
 function isTester(interaction) {
-  return interaction.member?.roles?.cache?.has(TESTER_ROLE_ID);
+  return interaction.member?.roles?.cache?.has(
+    TESTER_ROLE_ID
+  );
 }
 
 // ============================================================
@@ -173,7 +148,9 @@ function getActiveTestForTester(testerId) {
 // ============================================================
 
 function getPlayerRegion(member) {
-  for (const [region, roleId] of Object.entries(REGION_ROLES)) {
+  for (const [region, roleId] of Object.entries(
+    REGION_ROLES
+  )) {
     if (member.roles.cache.has(roleId)) {
       return region;
     }
@@ -183,7 +160,9 @@ function getPlayerRegion(member) {
 }
 
 function getPlayerRank(member) {
-  for (const [rank, roleId] of Object.entries(RANK_ROLES)) {
+  for (const [rank, roleId] of Object.entries(
+    RANK_ROLES
+  )) {
     if (member.roles.cache.has(roleId)) {
       return rank;
     }
@@ -199,7 +178,6 @@ async function changePlayerRank(member, newRank) {
     throw new Error(`Invalid rank: ${newRank}`);
   }
 
-  // Remove all existing rank roles
   const rolesToRemove = [];
 
   for (const roleId of Object.values(RANK_ROLES)) {
@@ -215,7 +193,6 @@ async function changePlayerRank(member, newRank) {
     );
   }
 
-  // Add new rank role
   await member.roles.add(
     newRoleId,
     `Testing result: ${newRank}`
@@ -288,9 +265,14 @@ async function updateQueuePanel() {
       components: [createPanelButtons()],
     });
 
-    console.log(`📊 Queue panel updated: ${queue.length} players`);
+    console.log(
+      `📊 Queue panel updated: ${queue.length} players`
+    );
   } catch (error) {
-    console.error("❌ Failed to update queue panel:", error);
+    console.error(
+      "❌ Failed to update queue panel:",
+      error
+    );
   }
 }
 
@@ -413,8 +395,14 @@ function escapeHTML(text) {
 // CREATE HTML TRANSCRIPT
 // ============================================================
 
-async function createTranscript(channel, playerId, testerId) {
-  console.log(`📄 Creating transcript for ${channel.name}`);
+async function createTranscript(
+  channel,
+  playerId,
+  testerId
+) {
+  console.log(
+    `📄 Creating transcript for ${channel.name}`
+  );
 
   let messages = [];
   let lastId;
@@ -428,7 +416,8 @@ async function createTranscript(channel, playerId, testerId) {
       options.before = lastId;
     }
 
-    const batch = await channel.messages.fetch(options);
+    const batch =
+      await channel.messages.fetch(options);
 
     if (batch.size === 0) {
       break;
@@ -453,7 +442,8 @@ async function createTranscript(channel, playerId, testerId) {
     .fetch(testerId)
     .catch(() => null);
 
-  const generatedAt = new Date().toLocaleString("en-GB");
+  const generatedAt =
+    new Date().toLocaleString("en-GB");
 
   let messageHTML = "";
 
@@ -467,9 +457,10 @@ async function createTranscript(channel, playerId, testerId) {
         message.author.username
     );
 
-    const timestamp = new Date(
-      message.createdTimestamp
-    ).toLocaleString("en-GB");
+    const timestamp =
+      new Date(
+        message.createdTimestamp
+      ).toLocaleString("en-GB");
 
     let content = escapeHTML(
       message.content || ""
@@ -484,7 +475,8 @@ async function createTranscript(channel, playerId, testerId) {
               attachment.url
             )}" target="_blank">
               ${escapeHTML(
-                attachment.name || "Attachment"
+                attachment.name ||
+                  "Attachment"
               )}
             </a>
           </div>
@@ -750,29 +742,39 @@ body {
 </html>
 `;
 
-  const transcriptDirectory = path.join(
-    __dirname,
-    "transcripts"
-  );
+  const transcriptDirectory =
+    path.join(
+      __dirname,
+      "transcripts"
+    );
 
-  if (!fs.existsSync(transcriptDirectory)) {
-    fs.mkdirSync(transcriptDirectory, {
-      recursive: true,
-    });
+  if (
+    !fs.existsSync(
+      transcriptDirectory
+    )
+  ) {
+    fs.mkdirSync(
+      transcriptDirectory,
+      {
+        recursive: true,
+      }
+    );
   }
 
-  const safeName = channel.name.replace(
-    /[^a-zA-Z0-9-_]/g,
-    "_"
-  );
+  const safeName =
+    channel.name.replace(
+      /[^a-zA-Z0-9-_]/g,
+      "_"
+    );
 
   const fileName =
     `${safeName}-${Date.now()}.html`;
 
-  const filePath = path.join(
-    transcriptDirectory,
-    fileName
-  );
+  const filePath =
+    path.join(
+      transcriptDirectory,
+      fileName
+    );
 
   fs.writeFileSync(
     filePath,
@@ -793,19 +795,6 @@ body {
 // ============================================================
 // SEND TRANSCRIPT
 // ============================================================
-
-/*
-  sendTranscript options:
-
-  sendToChannel = true/false
-  sendToPlayer = true/false
-
-  CLOSE:
-  true, true
-
-  FORCE:
-  true, false
-*/
 
 async function sendTranscript(
   channel,
@@ -828,10 +817,6 @@ async function sendTranscript(
   let savedToChannel = false;
   let sentToPlayer = false;
 
-  // ----------------------------------------------------------
-  // SEND TO TRANSCRIPT CHANNEL
-  // ----------------------------------------------------------
-
   if (sendToChannel) {
     try {
       const transcriptChannel =
@@ -846,8 +831,9 @@ async function sendTranscript(
       }
 
       const attachment =
-        new AttachmentBuilder(filePath)
-          .setName(fileName);
+        new AttachmentBuilder(
+          filePath
+        ).setName(fileName);
 
       await transcriptChannel.send({
         embeds: [
@@ -866,7 +852,7 @@ async function sendTranscript(
       savedToChannel = true;
 
       console.log(
-        `✅ Transcript sent to transcript channel`
+        "✅ Transcript sent to transcript channel"
       );
     } catch (error) {
       console.error(
@@ -876,18 +862,17 @@ async function sendTranscript(
     }
   }
 
-  // ----------------------------------------------------------
-  // SEND TO PLAYER
-  // ----------------------------------------------------------
-
   if (sendToPlayer) {
     try {
       const player =
-        await client.users.fetch(playerId);
+        await client.users.fetch(
+          playerId
+        );
 
       const attachment =
-        new AttachmentBuilder(filePath)
-          .setName(fileName);
+        new AttachmentBuilder(
+          filePath
+        ).setName(fileName);
 
       await player.send({
         embeds: [
@@ -906,7 +891,7 @@ async function sendTranscript(
       sentToPlayer = true;
 
       console.log(
-        `✅ Transcript sent to player`
+        "✅ Transcript sent to player"
       );
     } catch (error) {
       console.error(
@@ -915,10 +900,6 @@ async function sendTranscript(
       );
     }
   }
-
-  // ----------------------------------------------------------
-  // DELETE TEMP FILE
-  // ----------------------------------------------------------
 
   try {
     fs.unlinkSync(filePath);
@@ -1073,7 +1054,9 @@ const commands = [
     .setDescription(
       "Finish the current test and select the earned rank."
     ),
-].map((command) => command.toJSON());
+].map((command) =>
+  command.toJSON()
+);
 
 // ============================================================
 // REGISTER COMMANDS
@@ -1082,9 +1065,13 @@ const commands = [
 async function registerCommands() {
   try {
     const guild =
-      await client.guilds.fetch(GUILD_ID);
+      await client.guilds.fetch(
+        GUILD_ID
+      );
 
-    await guild.commands.set(commands);
+    await guild.commands.set(
+      commands
+    );
 
     console.log(
       `✅ Registered ${commands.length} slash commands in ${guild.name}`
@@ -1105,17 +1092,20 @@ async function registerCommands() {
 // BOT READY
 // ============================================================
 
-client.once("ready", async () => {
-  console.log(
-    `✅ Logged in as ${client.user.tag}`
-  );
+client.once(
+  "ready",
+  async () => {
+    console.log(
+      `✅ Logged in as ${client.user.tag}`
+    );
 
-  console.log(
-    `👥 Queue: ${queue.length} players`
-  );
+    console.log(
+      `👥 Queue: ${queue.length} players`
+    );
 
-  await registerCommands();
-});
+    await registerCommands();
+  }
+);
 
 // ============================================================
 // SHOW RANK SELECTION
@@ -1255,12 +1245,10 @@ async function processTestResult(
 
   await interaction.deferUpdate();
 
-  // ----------------------------------------------------------
-  // FETCH PLAYER
-  // ----------------------------------------------------------
-
   const guild =
-    await client.guilds.fetch(GUILD_ID);
+    await client.guilds.fetch(
+      GUILD_ID
+    );
 
   let playerMember;
 
@@ -1287,10 +1275,14 @@ async function processTestResult(
   // ----------------------------------------------------------
 
   const previousRank =
-    getPlayerRank(playerMember);
+    getPlayerRank(
+      playerMember
+    );
 
   const region =
-    getPlayerRegion(playerMember);
+    getPlayerRegion(
+      playerMember
+    );
 
   // ----------------------------------------------------------
   // CHANGE RANK
@@ -1344,7 +1336,11 @@ async function processTestResult(
 
   const resultDescription =
     `**<@${test.playerId}>**\n\n` +
-    `**Tester: <@${interaction.user.id}>  Region: ${region} Username: ${test.minecraftUsername} Previous Rank: ${previousRank} Rank Earned: ${rank}**`;
+    `**Tester:** <@${interaction.user.id}>\n` +
+    `**Region:** ${region}\n` +
+    `**Username:** ${test.minecraftUsername}\n` +
+    `**Previous Rank:** ${previousRank}\n` +
+    `**Rank Earned:** ${rank}`;
 
   // ----------------------------------------------------------
   // RESULTS CHANNEL
@@ -1528,7 +1524,8 @@ client.on(
               fetchReply: true,
             });
 
-          queuePanelMessage = message;
+          queuePanelMessage =
+            message;
 
           return;
         }
@@ -1614,8 +1611,9 @@ client.on(
               error
             );
 
-            // Put player back into queue
-            queue.unshift(queueEntry);
+            queue.unshift(
+              queueEntry
+            );
 
             await updateQueuePanel();
 
@@ -1639,7 +1637,6 @@ client.on(
               playerDiscordUsername
             );
 
-          // Prevent duplicate channel names
           const existingChannel =
             guild.channels.cache.find(
               (channel) =>
@@ -1698,7 +1695,7 @@ client.on(
                       PermissionsBitField.Flags.ManageChannels,
                       PermissionsBitField.Flags.EmbedLinks,
                       PermissionsBitField.Flags.AttachFiles,
-                  ],
+                    ],
                   },
                 ],
               });
@@ -1708,7 +1705,9 @@ client.on(
               error
             );
 
-            queue.unshift(queueEntry);
+            queue.unshift(
+              queueEntry
+            );
 
             await updateQueuePanel();
 
@@ -1910,10 +1909,6 @@ client.on(
             });
           }
 
-          // --------------------------------------------------
-          // USERNAME MODAL
-          // --------------------------------------------------
-
           const modal =
             new ModalBuilder()
               .setCustomId(
@@ -2058,11 +2053,6 @@ client.on(
             ephemeral: true,
           });
 
-          // --------------------------------------------------
-          // TRANSCRIPT
-          // CLOSE = CHANNEL + PLAYER
-          // --------------------------------------------------
-
           const transcriptResult =
             await sendTranscript(
               interaction.channel,
@@ -2074,10 +2064,6 @@ client.on(
               }
             );
 
-          // --------------------------------------------------
-          // MARK CLOSED
-          // --------------------------------------------------
-
           activeTests.set(
             interaction.channel.id,
             {
@@ -2086,10 +2072,6 @@ client.on(
               closedAt: new Date(),
             }
           );
-
-          // --------------------------------------------------
-          // LOCK PLAYER
-          // --------------------------------------------------
 
           try {
             await interaction.channel.permissionOverwrites.edit(
@@ -2111,10 +2093,6 @@ client.on(
               error
             );
           }
-
-          // --------------------------------------------------
-          // SEND 3 SEPARATE STATUS EMBEDS
-          // --------------------------------------------------
 
           await interaction.channel.send({
             embeds: [
@@ -2141,10 +2119,6 @@ client.on(
               ),
             ],
           });
-
-          // --------------------------------------------------
-          // CLOSED MESSAGE
-          // --------------------------------------------------
 
           await interaction.channel.send({
             embeds: [
@@ -2312,7 +2286,6 @@ client.on(
             );
           }
 
-          // Remove management buttons from old message
           try {
             await interaction.message.edit({
               components: [],
@@ -2399,7 +2372,6 @@ client.on(
             ephemeral: true,
           });
 
-          // FORCE TRANSCRIPT = CHANNEL ONLY
           const result =
             await sendTranscript(
               interaction.channel,
@@ -2410,10 +2382,6 @@ client.on(
                 sendToPlayer: false,
               }
             );
-
-          // --------------------------------------------------
-          // 3 SEPARATE STATUS EMBEDS
-          // --------------------------------------------------
 
           await interaction.followUp({
             embeds: [
@@ -2507,18 +2475,21 @@ client.on(
             interaction.channel.id
           );
 
-          setTimeout(async () => {
-            try {
-              await interaction.channel.delete(
-                "Ticket deleted by tester"
-              );
-            } catch (error) {
-              console.error(
-                "❌ Failed to delete ticket:",
-                error
-              );
-            }
-          }, 1500);
+          setTimeout(
+            async () => {
+              try {
+                await interaction.channel.delete(
+                  "Ticket deleted by tester"
+                );
+              } catch (error) {
+                console.error(
+                  "❌ Failed to delete ticket:",
+                  error
+                );
+              }
+            },
+            1500
+          );
 
           return;
         }
@@ -2528,12 +2499,9 @@ client.on(
       // MODALS
       // ======================================================
 
-      if (interaction.isModalSubmit()) {
-
-        // ----------------------------------------------------
-        // JOIN QUEUE MODAL
-        // ----------------------------------------------------
-
+      if (
+        interaction.isModalSubmit()
+      ) {
         if (
           interaction.customId ===
           "join_queue_modal"
@@ -2558,7 +2526,6 @@ client.on(
             });
           }
 
-          // Check again in case they joined while modal was open
           if (
             queue.some(
               (entry) =>
@@ -2596,11 +2563,9 @@ client.on(
             });
           }
 
-          // Add player + IGN
           queue.push({
             playerId:
               interaction.user.id,
-
             minecraftUsername,
           });
 
@@ -2632,11 +2597,6 @@ client.on(
       if (
         interaction.isStringSelectMenu()
       ) {
-
-        // ----------------------------------------------------
-        // /LOG RANK SELECT
-        // ----------------------------------------------------
-
         if (
           interaction.customId ===
           "select_rank_log"
@@ -2650,10 +2610,6 @@ client.on(
             "log"
           );
         }
-
-        // ----------------------------------------------------
-        // /FINISH RANK SELECT
-        // ----------------------------------------------------
 
         if (
           interaction.customId ===
